@@ -56,23 +56,36 @@ function leftColor(d) {
   return pace > elapsed + 0.15 && d.week_left < d.week_of * 0.5 ? C.warn : C.sage;
 }
 
-function rightText(stack, str, font, color) {
-  const row = stack.addStack(); row.layoutHorizontally(); row.addSpacer();
-  const t = row.addText(str); t.font = font; t.textColor = color; t.rightAlignText(); t.lineLimit = 1; t.minimumScaleFactor = 0.6;
-  return t;
-}
+// On a Hebrew iPhone, widget stacks lay out right-to-left: the first item added sits on the right.
+const RTL = /^he|^iw/.test(Device.language() || '') || /^he|^iw/.test(Device.locale() || '');
 
-function heroBlock(stack, d, width) {
-  rightText(stack, 'נשאר השבוע', Font.mediumSystemFont(12), C.muted);
-  stack.addSpacer(2);
-  rightText(stack, fmt(d.week_left), Font.heavySystemFont(30), leftColor(d));
-  stack.addSpacer(6);
-  const img = stack.addImage(bar(width, 7, d.week_of ? d.week_left / d.week_of : 0, leftColor(d)));
-  img.imageSize = new Size(width, 7);
-  stack.addSpacer(6);
-  const per = d.week_left > 0 ? `בערך ${fmt(d.week_left / d.days_left)} ליום` : 'מחכים ליום ראשון';
-  rightText(stack, d.days_left <= 1 ? 'יום אחרון לשבוע' : `${d.days_left} ימים · ${per}`, Font.systemFont(11), C.muted);
+function line(stack, align, addContent) {
+  const row = stack.addStack(); row.layoutHorizontally();
+  if (align === 'center') { row.addSpacer(); addContent(row); row.addSpacer(); }
+  else if ((align === 'right') !== RTL) { row.addSpacer(); addContent(row); }
+  else { addContent(row); row.addSpacer(); }
 }
+function text(stack, str, font, color, align = 'right') {
+  line(stack, align, row => { const t = row.addText(str); t.font = font; t.textColor = color; t.lineLimit = 1; t.minimumScaleFactor = 0.6; });
+}
+const rightText = (stack, str, font, color) => text(stack, str, font, color, 'right');
+
+function heroBlock(stack, d, width, align = 'center') {
+  text(stack, 'נשאר השבוע', Font.mediumSystemFont(13), C.muted, align);
+  stack.addSpacer(2);
+  text(stack, fmt(d.week_left), Font.heavySystemFont(32), leftColor(d), align);
+  stack.addSpacer(8);
+  line(stack, align, row => { const img = row.addImage(bar(width, 7, d.week_of ? d.week_left / d.week_of : 0, leftColor(d))); img.imageSize = new Size(width, 7); });
+  stack.addSpacer(8);
+  const per = d.week_left > 0 ? `בערך ${fmt(d.week_left / d.days_left)} ליום` : 'מחכים ליום ראשון';
+  text(stack, d.days_left <= 1 ? 'יום אחרון לשבוע' : `${d.days_left} ימים · ${per}`, Font.systemFont(11), C.muted, align);
+}
+// Tiles in reading order (right to left on a Hebrew phone).
+function tileRow(parent, cats, size) {
+  const l = parent.addStack(); l.layoutHorizontally(); l.spacing = 6;
+  (RTL ? cats : cats.slice().reverse()).forEach(c => tile(l, c, size));
+}
+const TILE_IDS = ['food', 'super', 'fun', 'misc'];
 
 function tile(parent, c, size) {
   const t = parent.addStack();
@@ -122,17 +135,13 @@ function buildWidget(d) {
 
   const pocketCats = d.categories.filter(c => c.env === 'pocket');
   if (fam === 'medium') {
+    const picked = TILE_IDS.map(id => d.categories.find(c => c.id === id)).filter(Boolean);
+    const cats = (picked.length === 4 ? picked : pocketCats).slice(0, 4);
     const row = w.addStack(); row.layoutHorizontally(); row.centerAlignContent();
-    // RTL: tiles on the left, number on the right
-    const grid = row.addStack(); grid.layoutVertically(); grid.spacing = 6;
-    const cats = pocketCats.slice(0, 4);
-    for (let r = 0; r < 2; r++) {
-      const line = grid.addStack(); line.layoutHorizontally(); line.spacing = 6;
-      cats.slice(r * 2, r * 2 + 2).reverse().forEach(c => tile(line, c, new Size(78, 60)));
-    }
-    row.addSpacer(12);
-    const hero = row.addStack(); hero.layoutVertically();
-    heroBlock(hero, d, 118);
+    const addHero = () => { const hero = row.addStack(); hero.layoutVertically(); heroBlock(hero, d, 110); };
+    const addGrid = () => { const grid = row.addStack(); grid.layoutVertically(); grid.spacing = 6; tileRow(grid, cats.slice(0, 2), new Size(78, 60)); tileRow(grid, cats.slice(2, 4), new Size(78, 60)); };
+    // number on the right, tiles on the left
+    if (RTL) { addHero(); row.addSpacer(8); addGrid(); } else { addGrid(); row.addSpacer(8); addHero(); }
     return w;
   }
 
@@ -141,10 +150,8 @@ function buildWidget(d) {
   w.addSpacer(12);
   const cats = [...pocketCats, ...d.categories.filter(c => c.env !== 'pocket' && c.env !== 'none')].slice(0, 8);
   const grid = w.addStack(); grid.layoutVertically(); grid.spacing = 6;
-  for (let r = 0; r < 2; r++) {
-    const line = grid.addStack(); line.layoutHorizontally(); line.spacing = 6;
-    cats.slice(r * 4, r * 4 + 4).reverse().forEach(c => tile(line, c, new Size(71, 64)));
-  }
+  tileRow(grid, cats.slice(0, 4), new Size(71, 64));
+  tileRow(grid, cats.slice(4, 8), new Size(71, 64));
   w.addSpacer();
   const s = d.summary || {};
   if (s.debtLeft > 0) rightText(w, `חובות: נשארו ${fmt(s.debtLeft)}${s.debtFree ? ` · בלי חובות ב${s.debtFree}` : ''}`, Font.systemFont(12), C.muted);
