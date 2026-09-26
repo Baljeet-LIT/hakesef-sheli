@@ -38,6 +38,7 @@ function fresh() {
     v: 1, setup: false, settings: clone(DEFAULT_SETTINGS),
     expenses: [], debtPays: [], savings: [], incomes: [], topups: [],
     checks: {}, learn: {}, lastBackup: 0, created: Date.now(),
+    cash: [], lastMethod: 'card',
     cloud: null, sync: freshSync()
   };
 }
@@ -114,6 +115,13 @@ function debtLeft(id, before = Infinity) { const d = debt(id); return d ? Math.m
 function totalDebtLeft() { return sum(S.settings.debts, d => debtLeft(d.id)); }
 function totalDebt() { return sum(S.settings.debts, d => d.total); }
 function savingsBalance() { return sum(S.savings, s => s.amount) - sum(S.expenses.filter(x => cat(x.cat).env === 'savings'), x => x.amount); }
+/* Cash wallet: last count + withdrawals since - cash expenses since. null until the first count. */
+function cashAnchor() { return (S.cash || []).filter(c => c.kind === 'count').sort((a, b) => b.ts - a.ts)[0] || null; }
+function cashBalance() {
+  const a = cashAnchor(); if (!a) return null;
+  return a.amount + sum((S.cash || []).filter(c => c.kind === 'withdraw' && c.ts > a.ts), c => c.amount)
+    - sum(S.expenses.filter(x => x.method === 'cash' && x.ts > a.ts), x => x.amount);
+}
 /* Run a hypothetical change and return the forecast, leaving the real state untouched. */
 function whatIf(change) { const snap = JSON.stringify(S); try { change(); return forecast(); } finally { S = JSON.parse(snap); } }
 function dateLabel(t) { return t ? monthName(t) : 'עוד לא ידוע'; }
@@ -263,9 +271,9 @@ async function sync() {
       const i = S.expenses.findIndex(x => x.id === e.id);
       if (sy.dirty[e.id]) continue;
       if (e.deleted) { if (i >= 0) { S.expenses.splice(i, 1); changed = true; } continue; }
-      const x = { id: e.id, ts: +e.ts, amount: +e.amount, desc: e.desc || '', cat: e.cat, m: +e.m };
+      const x = { id: e.id, ts: +e.ts, amount: +e.amount, desc: e.desc || '', cat: e.cat, method: e.method === 'cash' ? 'cash' : 'card', m: +e.m };
       if (i < 0) { if (!sy.tomb.some(t => t.id === e.id)) { S.expenses.push(x); learnFrom(x); changed = true; } }
-      else { const o = S.expenses[i]; if ((o.m || 0) <= x.m && (o.amount !== x.amount || o.cat !== x.cat || o.desc !== x.desc || o.ts !== x.ts)) { S.expenses[i] = x; changed = true; } }
+      else { const o = S.expenses[i]; if ((o.m || 0) <= x.m && (o.amount !== x.amount || o.cat !== x.cat || o.desc !== x.desc || o.ts !== x.ts || (o.method || 'card') !== x.method)) { S.expenses[i] = x; changed = true; } }
     }
     sy.since = p.now; sy.lastOk = Date.now(); sy.lastErr = '';
     if (changed) sy.docDirty = true; // widget summary follows new expenses
@@ -299,7 +307,7 @@ async function connectCloud(cloud) {
 function learnFrom(x) {
   const k = x.desc.trim().toLowerCase(); if (!k) return;
   const L = S.learn[k] || { desc: x.desc.trim(), n: 0 };
-  Object.assign(L, { cat: x.cat, amount: x.amount, n: L.n + 1, last: Date.now() });
+  Object.assign(L, { cat: x.cat, amount: x.amount, method: x.method || 'card', n: L.n + 1, last: Date.now() });
   S.learn[k] = L;
 }
 function suggestions(q = '') {
@@ -379,7 +387,7 @@ function header(title, sub = '') {
 function expenseItem(x, showDay = false) {
   const c = cat(x.cat);
   return `<li class="item" data-act="edit" data-id="${x.id}"><div class="cdot" style="background:${c.color}">${esc(c.name[0])}</div>
-    <div class="main"><div class="n">${esc(x.desc || c.name)}</div><div class="s">${esc(c.name)} · ${showDay ? dayLabel(x.ts) + ' · ' : ''}${timeLabel(x.ts)}</div></div>
+    <div class="main"><div class="n">${esc(x.desc || c.name)}</div><div class="s">${esc(c.name)}${x.method === 'cash' ? ' · מזומן' : ''} · ${showDay ? dayLabel(x.ts) + ' · ' : ''}${timeLabel(x.ts)}</div></div>
     <div class="amt">${money(x.amount)}</div></li>`;
 }
 
@@ -421,9 +429,9 @@ function viewToday() {
 
   // other envelopes
   const minis = S.settings.envelopes.filter(e => e.id !== 'pocket').map(e => ({ e, st: envStatus(e) })).filter(({ e, st }) => e.amount > 0 || st.of > 0 || st.spent > 0);
-  if (minis.length) {
-    out += `<div class="grid2">${minis.map(({ e, st }) => `<div class="card mini"><div class="l">${esc(e.name)}${e.type === 'monthly' ? ' · החודש' : ''}</div><div class="v">${money(st.left)}</div><div class="l">מתוך ${money(st.of)}</div></div>`).join('')}</div><div class="sp"></div>`;
-  }
+  const cb = cashBalance();
+  const walletCard = `<button class="card mini wallet" data-act="wallet" style="text-align:start"><div class="l">בארנק (מזומן)</div><div class="v">${cb == null ? '<span style="font-size:15px">לספור</span>' : money(cb)}</div><div class="l">${cb == null ? 'כמה יש לך עכשיו?' : 'לחיצה לפרטים'}</div></button>`;
+  out += `<div class="grid3">${walletCard}${minis.map(({ e, st }) => `<div class="card mini"><div class="l">${esc(e.name)}${e.type === 'monthly' ? ' · החודש' : ''}</div><div class="v">${money(st.left)}</div><div class="l">מתוך ${money(st.of)}</div></div>`).join('')}</div><div class="sp"></div>`;
 
   out += tiles();
   out += alerts().join('');
@@ -599,6 +607,7 @@ function viewSettings() {
     const sy = S.sync;
     out += `<div class="card"><h3>ענן</h3><p class="small" style="margin-top:0">${sy.lastErr ? `<span style="color:var(--bad)">הסנכרון האחרון נכשל: ${esc(sy.lastErr)}</span>` : sy.lastOk ? `מסונכרן · ${dayLabel(sy.lastOk)} ${timeLabel(sy.lastOk)}` : 'עוד לא סונכרן'}${Object.keys(sy.dirty).length ? ` · ${Object.keys(sy.dirty).length} מחכות לעלות` : ''}</p>
       <div class="row"><button class="btn ghost sm" data-act="sync-now">סנכרון עכשיו</button><button class="btn danger sm" data-act="disconnect">ניתוק</button></div></div>
+      ${viewNotifySettings()}
       <div class="card"><h3>ווידג'ט במסך הבית</h3>
       <ol class="small" style="padding-inline-start:18px;margin:0 0 12px;line-height:1.7">
         <li>להוריד מה-App Store את האפליקציה החינמית <b>Scriptable</b>.</li>
@@ -632,7 +641,7 @@ function closeSheet() { root.innerHTML = ''; UI.sheet = null; }
 /* Quick add / edit */
 let D = null; // draft
 function openAdd(existing) {
-  D = existing ? { ...existing, amountStr: String(existing.amount), editing: true } : { id: uid(), ts: Date.now(), amountStr: '', desc: '', cat: null, editing: false, catTouched: false };
+  D = existing ? { ...existing, amountStr: String(existing.amount), editing: true, method: existing.method || 'card' } : { id: uid(), ts: Date.now(), amountStr: '', desc: '', cat: null, editing: false, catTouched: false, method: S.lastMethod || 'card', methodTouched: false };
   openSheet(`<div id="add"></div>`, renderAdd);
 }
 function renderAdd() {
@@ -654,6 +663,7 @@ function renderAdd() {
     <div class="amount-display ${amt ? '' : 'zero'}"><span class="num">${D.amountStr || '0'}</span><span class="cur">₪</span></div>
     <div class="hint">${hint}</div>
     <input class="field" id="desc" placeholder="על מה? (לא חובה)" value="${esc(D.desc)}" autocomplete="off" enterkeyhint="done">
+    <div class="seg" style="margin-top:10px"><button class="${D.method !== 'cash' ? 'on' : ''}" data-act="method" data-v="card">כרטיס / אפל פיי</button><button class="${D.method === 'cash' ? 'on' : ''}" data-act="method" data-v="cash">מזומן${cashBalance() != null ? ` · בארנק ${stripTags(money(cashBalance() - (D.method === 'cash' ? amt : 0)))}` : ''}</button></div>
     <div class="lbl">קטגוריה</div>
     <div class="chips">${S.settings.categories.filter(k => k.env !== 'savings' || D.cat === k.id).map(k => `<button class="chip ${D.cat === k.id ? 'on' : ''}" style="--c:${k.color}" data-act="pick-cat" data-v="${k.id}">${esc(k.name)}</button>`).join('')}</div>
     <div class="keypad">${['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '⌫'].map(k => `<button class="key" data-act="key" data-v="${k}">${k}</button>`).join('')}</div>
@@ -664,6 +674,7 @@ function renderAdd() {
     D.desc = inp.value;
     const k = S.learn[D.desc.trim().toLowerCase()];
     if (k && !D.catTouched) D.cat = k.cat;
+    if (k && k.method && !D.methodTouched) D.method = k.method;
     const pos = inp.selectionStart; renderAdd();
     const n = document.getElementById('desc'); n.focus(); n.setSelectionRange(pos, pos);
   });
@@ -672,13 +683,14 @@ function renderAdd() {
 function saveExpense() {
   const amount = Math.round((parseFloat(D.amountStr) || 0) * 100) / 100;
   if (!(amount > 0) || !D.cat) return;
-  const x = { id: D.id, ts: D.ts, amount, desc: (D.desc || '').trim(), cat: D.cat, m: Date.now() };
+  const x = { id: D.id, ts: D.ts, amount, desc: (D.desc || '').trim(), cat: D.cat, method: D.method === 'cash' ? 'cash' : 'card', m: Date.now() };
+  S.lastMethod = x.method;
   markExp(x.id);
   const i = S.expenses.findIndex(e => e.id === x.id);
   if (i >= 0) S.expenses[i] = x; else S.expenses.push(x);
   learnFrom(x); save(); closeSheet(); render();
   const e = env(cat(x.cat).env);
-  toast(e ? `נשמר · נשאר ב${e.name}: ${stripTags(money(envStatus(e).left))}` : 'נשמר');
+  toast((e ? `נשמר · נשאר ב${e.name}: ${stripTags(money(envStatus(e).left))}` : 'נשמר') + (x.method === 'cash' && cashBalance() != null ? ` · בארנק ${stripTags(money(cashBalance()))}` : ''));
 }
 function stripTags(h) { return h.replace(/<[^>]+>/g, ''); }
 
@@ -843,6 +855,94 @@ function viewInsights() {
   return out + `</div>`;
 }
 
+/* ---------------- wallet ---------------- */
+
+function openWallet() {
+  const bal = cashBalance(), a = cashAnchor();
+  const since = a ? a.ts : 0;
+  const moves = [
+    ...(S.cash || []).filter(c => c.ts >= since).map(c => ({ ts: c.ts, t: c.kind === 'count' ? 'ספירת ארנק' : 'משיכה מכספומט', a: c.kind === 'count' ? c.amount : c.amount, sign: c.kind === 'count' ? '=' : '+', id: c.id })),
+    ...S.expenses.filter(x => x.method === 'cash' && x.ts > since).map(x => ({ ts: x.ts, t: x.desc || cat(x.cat).name, a: x.amount, sign: '-' })),
+  ].sort((p, q) => q.ts - p.ts).slice(0, 15);
+  openSheet(`<h2>הארנק</h2>
+    <div class="card" style="text-align:center"><div class="muted small">יש לך במזומן, לפי האפליקציה</div><div class="big-num" style="font-size:40px">${bal == null ? '?' : money(bal)}</div>
+      ${a ? `<div class="muted small">ספירה אחרונה: ${dayLabel(a.ts)}</div>` : '<div class="muted small">עוד לא ספרת. ספור פעם אחת, ומשם האפליקציה עוקבת לבד.</div>'}</div>
+    <div class="grid2"><button class="btn block" data-act="cash-count">ספרתי את הארנק</button><button class="btn ghost block" data-act="cash-withdraw">משכתי מזומן</button></div>
+    ${moves.length ? `<div class="card" style="margin-top:12px"><h3>מאז הספירה</h3><ul class="list">${moves.map(m => `<li class="item"><div class="main"><div class="n">${esc(m.t)}</div><div class="s">${dayLabel(m.ts)} · ${timeLabel(m.ts)}</div></div><div class="amt" style="color:${m.sign === '-' ? 'var(--ink)' : 'var(--sage)'}">${m.sign === '-' ? '−' : m.sign === '+' ? '+' : ''}${money(m.a)}</div>${m.id ? `<button class="x" data-act="cash-del" data-id="${m.id}">×</button>` : ''}</li>`).join('')}</ul></div>` : ''}
+    <p class="muted small">משיכה מהכספומט היא לא הוצאה. הכסף רק עובר מהחשבון לארנק. ההוצאה נרשמת כשאתה משלם במזומן.</p>`);
+}
+function cashCount() {
+  const bal = cashBalance();
+  openSheet(`<h2>כמה יש בארנק עכשיו?</h2><p class="muted" style="margin-top:-6px">סופרים שטרות ומטבעות, בערך זה מספיק.</p>
+    <input class="field" id="amt" inputmode="decimal" placeholder="סכום" style="font-size:26px;text-align:center;font-weight:800"><div id="diff"></div><div class="sp"></div><button class="btn block" id="ok">שמירה</button>`, sh => {
+    const amt = sh.querySelector('#amt'), diffEl = sh.querySelector('#diff'); setTimeout(() => amt.focus(), 250);
+    let mode = 'plain';
+    const upd = () => {
+      const v = parseFloat(amt.value); mode = 'plain';
+      if (bal == null || !(v >= 0)) { diffEl.innerHTML = ''; return; }
+      const d = Math.round(bal - v);
+      if (d > 5) { mode = 'missing'; diffEl.innerHTML = `<div class="alert warn" style="margin-top:12px"><span class="dot"></span><div><div class="t">חסרים ${money(d)} שלא נרשמו</div><div class="d">כנראה משהו קטן במזומן שנשכח. בשמירה נרשום אותם כהוצאה "שונות", כדי שהשבוע יהיה מדויק.</div><div class="act"><button class="btn sm ghost" id="nolog">רק לעדכן, בלי הוצאה</button></div></div></div>`; sh.querySelector('#nolog').onclick = () => { mode = 'plain'; save1(); }; }
+      else if (d < -5) diffEl.innerHTML = `<p class="muted small" style="margin-top:10px">יש ${money(-d)} יותר ממה שחשבתי. אולי נרשמה הוצאה במזומן שבעצם שולמה בכרטיס. מעדכן לפי הספירה.</p>`;
+      else diffEl.innerHTML = `<p class="small" style="margin-top:10px;color:var(--sage);font-weight:700">מדויק. כל הכבוד.</p>`;
+    };
+    amt.addEventListener('input', upd);
+    const save1 = () => {
+      const v = parseFloat(amt.value); if (!(v >= 0)) { amt.focus(); return; }
+      const ts = Date.now();
+      if (mode === 'missing') { const miss = Math.round(bal - v); const misc = S.settings.categories.find(c => c.id === 'misc') ? 'misc' : S.settings.categories.find(c => c.env === 'pocket').id; const x = { id: uid(), ts: ts - 1, amount: miss, desc: 'מזומן שלא נרשם', cat: misc, method: 'cash', m: ts }; S.expenses.push(x); markExp(x.id); }
+      S.cash = S.cash || []; S.cash.push({ id: uid(), ts, kind: 'count', amount: v });
+      save(); closeSheet(); render(); toast(`בארנק: ${stripTags(money(v))}`);
+    };
+    sh.querySelector('#ok').onclick = save1;
+  });
+}
+
+/* ---------------- notifications ---------------- */
+
+const NOTIFY_URL = () => S.cloud && `${S.cloud.url}/functions/v1/mf-notify`;
+const NOTIFY_TYPES = [
+  ['sunday', 'יום ראשון בבוקר: שבוע חדש, כמה יש'],
+  ['due', 'תשלומים: ערב לפני, ובבוקר של היום עצמו'],
+  ['budget', 'כשכסף הכיס מתחיל להיגמר'],
+  ['evening', 'בערב, אם לא נרשם כלום באותו יום'],
+  ['cash', 'ביום שישי: לספור את הארנק'],
+  ['month', 'ב-1 לחודש: בדיקה חודשית'],
+];
+function notifyState() {
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) return standalone ? 'unsupported' : 'install';
+  return Notification.permission; // default | granted | denied
+}
+function b64ToBytes(b64) { const s = atob(b64.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((b64.length + 3) % 4)); return Uint8Array.from(s, c => c.charCodeAt(0)); }
+async function enableNotifications() {
+  const perm = await Notification.requestPermission(); // must run straight from the tap on iOS
+  if (perm !== 'granted') { render(); toast('ההתראות לא אושרו. אפשר לאשר בהגדרות האייפון'); return; }
+  try {
+    const { publicKey } = await (await fetch(NOTIFY_URL())).json();
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
+    await rpc('mf_subscribe', { p_sub: sub.toJSON() });
+    S.pushOn = true; persist(); render(); toast('ההתראות פועלות');
+  } catch (e) { toast('לא הצלחתי להפעיל: ' + String(e.message || e).slice(0, 60)); }
+}
+async function testNotification() {
+  try { const r = await (await fetch(NOTIFY_URL(), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'test', key: S.cloud.key }) })).json(); toast(r.sent ? 'נשלחה. תוך כמה שניות היא אמורה להגיע' : 'לא נמצא מכשיר רשום. נסה להפעיל שוב'); }
+  catch (e) { toast('השליחה נכשלה'); }
+}
+function viewNotifySettings() {
+  if (!S.cloud) return '';
+  const stt = notifyState(), on = Object.assign({ sunday: true, due: true, evening: true, budget: true, cash: true, month: true }, S.settings.notify || {});
+  let body;
+  if (stt === 'install') body = `<p class="muted small" style="margin-top:0">התראות עובדות רק כשהאפליקציה פתוחה מהאייקון במסך הבית, ובאייפון עם iOS 16.4 ומעלה.</p>`;
+  else if (stt === 'unsupported') body = `<p class="muted small" style="margin-top:0">המכשיר הזה לא תומך בהתראות. צריך לעדכן את האייפון ל-iOS 16.4 ומעלה.</p>`;
+  else if (stt === 'denied') body = `<p class="muted small" style="margin-top:0">ההתראות חסומות. כדי לפתוח: הגדרות האייפון, התראות, "הכסף שלי", ולהפעיל.</p>`;
+  else if (stt !== 'granted' || !S.pushOn) body = `<p class="muted small" style="margin-top:0">תזכורות לתשלומים, לשבוע החדש, ולספירת הארנק. בלי ספאם: כל התראה נשלחת רק כשיש סיבה.</p><button class="btn block" data-act="push-on">הפעלת התראות</button>`;
+  else body = `${NOTIFY_TYPES.map(([k, label]) => `<button class="check ${on[k] ? 'done' : ''}" data-act="notify-toggle" data-v="${k}"><span class="box">${on[k] ? I.check : ''}</span><span class="main"><div class="n" style="text-decoration:none;color:var(--ink)">${label}</div></span></button>`).join('')}
+    <div class="sp"></div><button class="btn ghost sm" data-act="push-test">שליחת התראת בדיקה</button>`;
+  return `<div class="card"><h3>התראות</h3>${body}</div>`;
+}
+
 /* Backup */
 async function backup() {
   const data = JSON.stringify(S);
@@ -909,7 +1009,8 @@ document.addEventListener('click', e => {
       D.amountStr = s; renderAdd(); break;
     }
     case 'pick-cat': D.cat = v; D.catTouched = true; renderAdd(); break;
-    case 'sugg': { const l = S.learn[v.toLowerCase()]; if (l) { D.desc = l.desc; D.cat = l.cat; if (!parseFloat(D.amountStr)) D.amountStr = String(l.amount); } renderAdd(); break; }
+    case 'method': D.method = v; D.methodTouched = true; renderAdd(); break;
+    case 'sugg': { const l = S.learn[v.toLowerCase()]; if (l) { D.desc = l.desc; D.cat = l.cat; if (l.method && !D.methodTouched) D.method = l.method; if (!parseFloat(D.amountStr)) D.amountStr = String(l.amount); } renderAdd(); break; }
     case 'when': { const t = new Date(Date.now()); if (v === '1') t.setDate(t.getDate() - 1); D.ts = t.getTime(); renderAdd(); break; }
     case 'save-exp': saveExpense(); break;
     case 'del-exp': { const old = S.expenses.find(x => x.id === D.id); if (old && S.cloud) { S.sync.tomb.push({ id: old.id, ts: old.ts, amount: old.amount, cat: old.cat, desc: '', m: Date.now() }); delete S.sync.dirty[old.id]; } }
@@ -978,6 +1079,13 @@ document.addEventListener('click', e => {
       });
       break;
     }
+    case 'wallet': openWallet(); break;
+    case 'cash-count': cashCount(); break;
+    case 'cash-withdraw': askAmount({ title: 'משכתי מזומן', sub: 'כמה הוצאת מהכספומט?' }, a => { S.cash = S.cash || []; if (!cashAnchor()) { toast('קודם לספור את הארנק פעם אחת'); cashCount(); return; } S.cash.push({ id: uid(), ts: Date.now(), kind: 'withdraw', amount: a }); save(); closeSheet(); render(); toast(`בארנק: ${stripTags(money(cashBalance()))}`); }); break;
+    case 'cash-del': S.cash = (S.cash || []).filter(c => c.id !== b.dataset.id); save(); openWallet(); render(); break;
+    case 'push-on': enableNotifications(); break;
+    case 'push-test': testNotification(); break;
+    case 'notify-toggle': { S.settings.notify = Object.assign({ sunday: true, due: true, evening: true, budget: true, cash: true, month: true }, S.settings.notify || {}); S.settings.notify[v] = !S.settings.notify[v]; save(); render(); break; }
     case 'disconnect': S.cloud = null; S.sync = freshSync(); persist(); render(); toast('נותק מהענן'); break;
     case 'tile': openAdd(); D.cat = v; D.catTouched = true; renderAdd(); break;
     case 'setup-blank': S.setup = true; save(); UI.tab = 'settings'; render(); break;
@@ -999,7 +1107,9 @@ function applyHash() {
   const m = h.match(/tab=(\w+)/); if (m) UI.tab = m[1];
   render();
   if (h.includes('add')) openAdd();
+  if (h.includes('wallet') && S.setup) openWallet();
 }
+window.addEventListener('hashchange', () => { const h = location.hash; if (h.includes('wallet')) openWallet(); else if (h.includes('add')) openAdd(); else { const m = h.match(/tab=(\w+)/); if (m) { UI.tab = m[1]; render(); } } });
 function seed() {
   const d = n => Date.now() - n * DAY;
   [['פלאפל', 38, 'food', 0], ['סופר', 214, 'super', 1], ['בירה עם החבר׳ה', 180, 'fun', 2], ['קפה', 16, 'food', 0], ['שווארמה', 62, 'food', 3], ['קפה', 16, 'food', 4]].forEach(([desc, amount, c, n]) => { const x = { id: uid(), ts: d(n), desc, amount, cat: c }; S.expenses.push(x); learnFrom(x); });

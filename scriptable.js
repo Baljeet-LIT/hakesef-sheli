@@ -156,6 +156,7 @@ function buildWidget(d) {
   const s = d.summary || {};
   if (s.debtLeft > 0) rightText(w, `חובות: נשארו ${fmt(s.debtLeft)}${s.debtFree ? ` · בלי חובות ב${s.debtFree}` : ''}`, Font.systemFont(12), C.muted);
   else if (s.savings != null) rightText(w, `בקופה בצד: ${fmt(s.savings)}`, Font.systemFont(12), C.muted);
+  if (d.cash != null) rightText(w, `בארנק: ${fmt(d.cash)}`, Font.systemFont(12), C.muted);
   (d.monthly || []).forEach(m => rightText(w, `${m.name} החודש: נשארו ${fmt(m.left)}`, Font.systemFont(12), C.muted));
   return w;
 }
@@ -179,16 +180,19 @@ async function quickLog(d) {
   a.message = `נשאר השבוע: ${fmt(d.week_left)}`;
   const amt = a.addTextField('סכום', ''); amt.setDecimalPadKeyboard();
   a.addTextField('על מה? (לא חובה)', '');
-  a.addAction('שמירה');
+  a.addAction('שמירה · כרטיס');
+  a.addAction(`שמירה · מזומן${d.cash != null ? ` (בארנק ${fmt(d.cash)})` : ''}`);
   a.addCancelAction('ביטול');
-  if (await a.presentAlert() < 0) return;
+  const choice = await a.presentAlert();
+  if (choice < 0) return;
+  const method = choice === 1 ? 'cash' : 'card';
   const amount = parseFloat(String(a.textFieldValue(0)).replace(',', '.'));
   if (!(amount > 0)) { const e = new Alert(); e.title = 'לא נרשם'; e.message = 'צריך סכום גדול מאפס.'; e.addAction('אוקיי'); await e.present(); return; }
-  const res = await rpc('mf_quick_add', { p_amount: amount, p_cat: cat.id, p_desc: a.textFieldValue(1) || '' });
+  const res = await rpc('mf_quick_add', { p_amount: amount, p_cat: cat.id, p_desc: a.textFieldValue(1) || '', p_method: method });
   fm.writeString(cachePath, JSON.stringify(res));
   const ok = new Alert();
   ok.title = `נשמר · ${fmt(amount)}`;
-  ok.message = `נשאר לך השבוע ${fmt(res.week_left)}`;
+  ok.message = `נשאר לך השבוע ${fmt(res.week_left)}${method === 'cash' && res.cash != null ? `\nבארנק: ${fmt(res.cash)}` : ''}`;
   ok.addAction('סגור');
   await ok.present();
 }
