@@ -917,18 +917,25 @@ function b64ToBytes(b64) { const s = atob(b64.replace(/-/g, '+').replace(/_/g, '
 async function enableNotifications() {
   const perm = await Notification.requestPermission(); // must run straight from the tap on iOS
   if (perm !== 'granted') { render(); toast('ההתראות לא אושרו. אפשר לאשר בהגדרות האייפון'); return; }
+  let step = 'מפתח';
   try {
-    const { publicKey } = await (await fetch(NOTIFY_URL())).json();
+    const publicKey = await rpc('mf_vapid_public', {});
+    if (typeof publicKey !== 'string' || publicKey.length < 80) throw new Error('bad key');
+    step = 'רישום המכשיר';
     const reg = await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
+    step = 'שמירה בשרת';
     await rpc('mf_subscribe', { p_sub: sub.toJSON() });
     S.pushOn = true; persist(); render(); toast('ההתראות פועלות');
-  } catch (e) { toast('לא הצלחתי להפעיל: ' + String(e.message || e).slice(0, 60)); }
+  } catch (e) { toast(`נתקע בשלב "${step}": ${String(e.message || e).slice(0, 60)}`); }
 }
 async function testNotification() {
-  try { const r = await (await fetch(NOTIFY_URL(), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'test', key: S.cloud.key }) })).json(); toast(r.sent ? 'נשלחה. תוך כמה שניות היא אמורה להגיע' : 'לא נמצא מכשיר רשום. נסה להפעיל שוב'); }
-  catch (e) { toast('השליחה נכשלה'); }
+  try {
+    const res = await fetch(NOTIFY_URL(), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'test', key: S.cloud.key }) });
+    const txt = await res.text(); let r = {}; try { r = JSON.parse(txt); } catch (e) {}
+    toast(r.sent ? 'נשלחה. תוך כמה שניות היא אמורה להגיע' : r.sent === 0 ? 'לא נמצא מכשיר רשום. נסה להפעיל שוב' : `השליחה נכשלה (${res.status})`);
+  } catch (e) { toast('השליחה נכשלה: ' + String(e.message || e).slice(0, 60)); }
 }
 function viewNotifySettings() {
   if (!S.cloud) return '';

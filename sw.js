@@ -1,5 +1,5 @@
 // Offline shell. Bump VERSION on every deploy so phones pick up the new files.
-const VERSION = 'v6';
+const VERSION = 'v7';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', 'scriptable.js'];
 
 self.addEventListener('install', e => {
@@ -12,7 +12,8 @@ self.addEventListener('activate', e => {
 
 // Network first (so updates arrive), cache fallback (so it works offline).
 self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
+  // Only the app's own files. Server calls (Supabase) go straight to the network, untouched.
+  if (e.request.method !== 'GET' || new URL(e.request.url).origin !== self.location.origin) return;
   e.respondWith(
     fetch(e.request).then(res => {
       const copy = res.clone();
