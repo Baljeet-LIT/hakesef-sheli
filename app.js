@@ -91,11 +91,12 @@ function pocketMonthly() { return sum(S.settings.envelopes.filter(e => e.fromInc
 function billsMonthly() { return sum(S.settings.bills, b => b.amount); }
 function baseFree() { return S.settings.income - billsMonthly() - pocketMonthly(); } // before debts
 
+function weekAmount(e, ws) { const o = (S.settings.weekOverrides || {})[String(ws)]; return o != null ? o : e.amount; }
 function envStatus(e, now = Date.now()) {
   const cats = catsOf(e.id);
   if (e.type === 'weekly') {
-    const a = weekStart(now), spent = sum(expIn(a, a + 7 * DAY, x => cats.includes(x.cat)), x => x.amount);
-    return { spent, left: e.amount - spent, of: e.amount, from: a, to: a + 7 * DAY };
+    const a = weekStart(now), spent = sum(expIn(a, a + 7 * DAY, x => cats.includes(x.cat)), x => x.amount), of = weekAmount(e, a);
+    return { spent, left: of - spent, of, from: a, to: a + 7 * DAY, special: of !== e.amount };
   }
   if (e.type === 'monthly') {
     const a = monthStart(now), b = monthStart(now, 1), spent = sum(expIn(a, b, x => cats.includes(x.cat)), x => x.amount);
@@ -396,11 +397,11 @@ function viewToday() {
     if (st.left < 0) msg = `עברת את השבוע ב-${money(-st.left)}. מהיום עד יום ראשון מחכים, בלי למשוך מחשבון הבית.`;
     else if (daysLeft === 1) msg = `זה היום האחרון של השבוע. מחר נכנסים ${money(st.of)} חדשים.`;
     else msg = `עוד ${daysLeft} ימים עד יום ראשון · בערך ${money(perDay)} ליום`;
-    out += `<div class="card hero ${cls}">
+    out += `<div class="card hero ${cls}" data-act="week-edit">
       <div class="label">נשאר לך השבוע</div>
       <div class="amount">${money(st.left, false)}<span class="cur">₪</span></div>
       <div class="bar"><i style="width:${pct}%"></i><span class="mark" style="inset-inline-start:${(1 - elapsed) * 100}%"></span></div>
-      <div class="meta">${msg}</div></div>`;
+      <div class="meta">${msg}</div>${st.special ? `<div class="meta small" style="opacity:.75;margin-top:4px">סכום מיוחד לשבוע הזה (בדרך כלל ${money(pocket.amount)}). לחיצה כדי לשנות.</div>` : ''}</div>`;
   }
 
   // other envelopes
@@ -819,6 +820,16 @@ document.addEventListener('click', e => {
       navigator.clipboard.writeText(code).then(() => toast('הקוד הועתק. עכשיו לפתוח את Scriptable'), () => openSheet(`<h2>קוד לווידג'ט</h2><p class="muted">סמן הכל והעתק:</p><textarea class="field" style="min-height:260px">${esc(code)}</textarea>`));
       break;
     }
+    case 'week-edit': {
+      const e = env('pocket'); if (!e) break;
+      const ws = weekStart(), cur = weekAmount(e, ws);
+      askAmount({ title: 'הסכום לשבוע הזה', sub: `בדרך כלל ${stripTags(money(e.amount))}. אפשר לשנות רק לשבוע הזה, למשל בחג או בשבוע של אירוע.`, initial: cur, cta: 'שמירה' }, v => {
+        S.settings.weekOverrides = S.settings.weekOverrides || {};
+        if (v === e.amount) delete S.settings.weekOverrides[String(ws)]; else S.settings.weekOverrides[String(ws)] = v;
+        save(); closeSheet(); render(); toast('עודכן לשבוע הזה');
+      });
+      break;
+    }
     case 'disconnect': S.cloud = null; S.sync = freshSync(); persist(); render(); toast('נותק מהענן'); break;
     case 'tile': openAdd(); D.cat = v; D.catTouched = true; renderAdd(); break;
     case 'setup-blank': S.setup = true; save(); UI.tab = 'settings'; render(); break;
@@ -849,6 +860,15 @@ function seed() {
 applyHash();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+(function migrate() {
+  S.migr = S.migr || {};
+  if (!S.migr.transitionWeek && S.setup && S.settings.startMonth === new Date(2026, 9, 1).getTime()) {
+    const ws = String(new Date(2026, 8, 27).getTime());
+    S.settings.weekOverrides = S.settings.weekOverrides || {};
+    if (S.settings.weekOverrides[ws] == null) S.settings.weekOverrides[ws] = 900;
+    S.migr.transitionWeek = true; save(); render();
+  }
+})();
 let SCRIPT_TPL = null;
 function loadScriptTpl() { fetch('scriptable.js').then(r => r.ok ? r.text() : null).then(t => { if (t) SCRIPT_TPL = t; }).catch(() => {}); }
 if (S.cloud) { loadScriptTpl(); scheduleSync(300); }
