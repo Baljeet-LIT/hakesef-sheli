@@ -23,6 +23,7 @@ const DEFAULT_SETTINGS = {
     { id: 'wolt', name: 'וולט', env: 'wolt', budget: 0, color: '#1fa0c9' },
     { id: 'clothes', name: 'בגדים', env: 'clothes', budget: 0, color: '#c24f6b' },
     { id: 'home', name: 'מחשבון הבית', env: 'none', budget: 0, color: '#5a4175' },
+    { id: 'fromsav', name: 'מהקופה בצד', env: 'savings', budget: 0, color: '#6b5a80' },
   ],
   bills: [],                     // {id,name,amount,day}
   debts: [],                     // {id,name,total,monthly,day}
@@ -112,7 +113,18 @@ function debtPaid(id, before = Infinity) { return sum(S.debtPays.filter(p => p.d
 function debtLeft(id, before = Infinity) { const d = debt(id); return d ? Math.max(0, d.total - debtPaid(id, before)) : 0; }
 function totalDebtLeft() { return sum(S.settings.debts, d => debtLeft(d.id)); }
 function totalDebt() { return sum(S.settings.debts, d => d.total); }
-function savingsBalance() { return sum(S.savings, s => s.amount); }
+function savingsBalance() { return sum(S.savings, s => s.amount) - sum(S.expenses.filter(x => cat(x.cat).env === 'savings'), x => x.amount); }
+/* Run a hypothetical change and return the forecast, leaving the real state untouched. */
+function whatIf(change) { const snap = JSON.stringify(S); try { change(); return forecast(); } finally { S = JSON.parse(snap); } }
+function dateLabel(t) { return t ? monthName(t) : 'עוד לא ידוע'; }
+function impactLine(before, after) {
+  const row = (label, a, b) => {
+    if (a === b) return `<div class="row"><span>${label}</span><b>${dateLabel(b)}</b></div>`;
+    const better = (b || Infinity) < (a || Infinity);
+    return `<div class="row"><span>${label}</span><span><s class="muted">${dateLabel(a)}</s> <b style="color:${better ? 'var(--sage)' : 'var(--bad)'}">${dateLabel(b)}</b></span></div>`;
+  };
+  return `<div class="card" style="margin-top:10px"><h3>מה זה עושה לתוכנית</h3>${totalDebtLeft() > 0 ? row('בלי חובות', before.debtFree, after.debtFree) : ''}${row(`${stripTags(money(S.settings.savingsGoal))} בצד`, before.goal, after.goal)}</div>`;
+}
 
 /* How much of this month's money is still unassigned in the home account. */
 function planStarted(a) { return !S.settings.startMonth || a >= S.settings.startMonth; }
@@ -178,6 +190,7 @@ function forecast() {
   const order = [...S.settings.priority, ...S.settings.debts.map(d => d.id).filter(id => !S.settings.priority.includes(id))];
   let debtFree = totalDebtLeft() <= 0 ? Date.now() : null, goal = sav >= S.settings.savingsGoal ? Date.now() : null;
   const cur = monthMoney(0);
+  let carry = 0;
   for (let m = 0; m < 120 && (!debtFree || !goal); m++) {
     const t = monthStart(Date.now(), m);
     if (!planStarted(t)) continue;
@@ -189,11 +202,13 @@ function forecast() {
         const pending = Math.max(0, Math.min(d.monthly || 0, debtLeft(d.id, t)) - paidNow);
         dl[d.id] = Math.max(0, dl[d.id] - pending);
       }
-      pool = Math.max(0, cur.free);
+      pool = cur.free;
     } else {
       pool = baseFree();
       for (const d of S.settings.debts) { const x = Math.min(d.monthly || 0, dl[d.id]); dl[d.id] -= x; pool -= x; }
     }
+    pool += carry; carry = 0;
+    if (pool < 0) { carry = pool; pool = 0; }
     for (const p of order) {
       if (pool <= 0) break;
       if (p === 'emergency') { const x = Math.min(Math.max(0, S.settings.emergencyGoal - sav), pool); sav += x; pool -= x; }
@@ -421,7 +436,7 @@ function viewToday() {
 
 function tiles() {
   const ws = weekStart(), ms = monthStart();
-  const cats = S.settings.categories.filter(c => c.env !== 'none');
+  const cats = S.settings.categories.filter(c => c.env !== 'none' && c.env !== 'savings');
   if (!cats.length) return '';
   return `<div class="tiles">${cats.map(c => {
     const weekly = c.env === 'pocket';
@@ -503,7 +518,8 @@ function viewMonth() {
     out += `<div class="card"><h3>כסף בלי תפקיד החודש</h3><div class="big-num">${money(Math.max(0, mm.free))}</div>
       <p class="muted small" style="margin:6px 0 12px">מה שנשאר מהמשכורות אחרי הדירה, החשבונות, החובות הקבועים וכסף הכיס${mm.commissions ? `, כולל עמלות של ${money(mm.commissions)}` : ''}. לפי התוכנית, הבא בתור: <b>${esc(t.name)}</b>.</p>
       ${mm.free > 0 ? `<button class="btn sage block" data-act="allocate-month">להעביר לפי התוכנית</button>` : ''}
-      <div class="sp"></div><div class="row"><button class="btn ghost sm" data-act="income">נכנסה עמלה</button><button class="btn ghost sm" data-act="topup">הוספה לקופת בגדים</button></div></div>`;
+      <div class="sp"></div><div class="row"><button class="btn ghost sm" data-act="events">קרה משהו?</button><button class="btn ghost sm" data-act="topup">הוספה לקופת בגדים</button></div></div>`;
+    out += viewInsights();
   }
   return out;
 }
@@ -519,13 +535,14 @@ function viewGoals() {
     ${total > 0 ? `<div class="bar"><i style="width:${(1 - left / total) * 100}%"></i></div>` : ''}
     <div class="meta small" style="opacity:.75">לפי הקצב של התוכנית, בלי עמלות. כל עמלה מקדימה את התאריך.</div></div>`;
 
+  out += `<button class="btn block" style="margin:0 0 12px" data-act="events">קרה משהו? בונוס, הוצאה גדולה, שינוי</button>`;
   // savings
   const eg = st.emergencyGoal, sg = st.savingsGoal;
   out += `<div class="card"><div class="row"><h3 style="margin:0">הקופה בצד</h3><span class="muted small">יעד ${money(sg)}</span></div>
     <div class="big-num" style="margin-top:6px">${money(sav)}</div>
     <div class="bar"><i style="width:${Math.min(100, sav / sg * 100)}%"></i><span class="mark" style="inset-inline-start:${eg / sg * 100}%"></span></div>
     <div class="muted small">${sav < eg ? `קופת חירום: עוד ${money(eg - sav)} עד ${money(eg)}` : 'קופת החירום מלאה'}</div>
-    <div class="sp"></div><div class="row"><button class="btn ghost sm" data-act="saving" data-v="1">הפקדה</button><button class="btn ghost sm" data-act="saving" data-v="-1">משיכה</button><button class="btn ghost sm" data-act="income">נכנסה עמלה</button></div></div>`;
+    <div class="sp"></div><div class="row"><button class="btn ghost sm" data-act="saving" data-v="1">הפקדה</button><button class="btn ghost sm" data-act="saving" data-v="-1">משיכה</button></div></div>`;
 
   // debts
   for (const d of st.debts) {
@@ -570,7 +587,7 @@ function viewSettings() {
   out += `<div class="card"><h3>הסדר שבו הולך כסף נוסף</h3>${pri.map((p, i) => `<div class="set-line"><span>${i + 1}. ${esc(names[p])}</span><span><button class="btn ghost sm" data-act="pri" data-v="${p}" data-d="-1" ${i === 0 ? 'disabled style="opacity:.3"' : ''}>למעלה</button></span></div>`).join('')}</div>`;
 
   out += `<div class="card"><h3>קטגוריות</h3><div class="form-row h" style="grid-template-columns:1fr 90px 1fr 36px"><span>שם</span><span>יעד חודשי</span><span>יורד מ-</span><span></span></div>
-    ${st.categories.map((c, i) => `<div class="form-row" style="grid-template-columns:1fr 90px 1fr 36px"><input data-set="categories.${i}.name" value="${esc(c.name)}"><input inputmode="decimal" data-set="categories.${i}.budget" value="${c.budget || 0}"><select class="field" style="padding:8px" data-set="categories.${i}.env">${[...st.envelopes.map(e => [e.id, e.name]), ['none', 'חשבון הבית']].map(([v, n]) => `<option value="${v}" ${c.env === v ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select><button class="x" data-act="del-row" data-v="categories.${i}">×</button></div>`).join('')}
+    ${st.categories.map((c, i) => `<div class="form-row" style="grid-template-columns:1fr 90px 1fr 36px"><input data-set="categories.${i}.name" value="${esc(c.name)}"><input inputmode="decimal" data-set="categories.${i}.budget" value="${c.budget || 0}"><select class="field" style="padding:8px" data-set="categories.${i}.env">${[...st.envelopes.map(e => [e.id, e.name]), ['none', 'חשבון הבית'], ['savings', 'הקופה בצד']].map(([v, n]) => `<option value="${v}" ${c.env === v ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select><button class="x" data-act="del-row" data-v="categories.${i}">×</button></div>`).join('')}
     <button class="btn ghost sm" data-act="add-row" data-v="categories">הוספת קטגוריה</button></div>`;
 
   const bf = baseFree(), dm = sum(st.debts.filter(d => debtLeft(d.id) > 0), d => d.monthly || 0);
@@ -638,7 +655,7 @@ function renderAdd() {
     <div class="hint">${hint}</div>
     <input class="field" id="desc" placeholder="על מה? (לא חובה)" value="${esc(D.desc)}" autocomplete="off" enterkeyhint="done">
     <div class="lbl">קטגוריה</div>
-    <div class="chips">${S.settings.categories.map(k => `<button class="chip ${D.cat === k.id ? 'on' : ''}" style="--c:${k.color}" data-act="pick-cat" data-v="${k.id}">${esc(k.name)}</button>`).join('')}</div>
+    <div class="chips">${S.settings.categories.filter(k => k.env !== 'savings' || D.cat === k.id).map(k => `<button class="chip ${D.cat === k.id ? 'on' : ''}" style="--c:${k.color}" data-act="pick-cat" data-v="${k.id}">${esc(k.name)}</button>`).join('')}</div>
     <div class="keypad">${['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '⌫'].map(k => `<button class="key" data-act="key" data-v="${k}">${k}</button>`).join('')}</div>
     <button class="btn block" data-act="save-exp" ${amt > 0 && D.cat ? '' : 'disabled style="opacity:.45"'}>${amt > 0 && !D.cat ? 'בחר קטגוריה' : 'שמירה'}</button>
     ${D.editing ? `<div class="sp"></div><button class="btn danger block" data-act="del-exp">מחיקה</button>` : ''}`;
@@ -686,19 +703,144 @@ function showAllocation(amount, title, note, extra) {
   });
 }
 
-function onIncome() {
-  askAmount({ title: 'נכנסה עמלה', sub: 'כמה נכנס נטו?', cta: 'המשך' }, v => {
-    const inc = { id: uid(), ts: Date.now(), amount: v, kind: 'commission' };
-    if (totalDebtLeft() > 0) {
-      showAllocation(v, 'עמלה נכנסה', 'עמלה', () => S.incomes.push(inc));
-    } else {
-      const yours = Math.round(v * S.settings.commissionShareAfterDebts), save70 = v - yours;
-      openSheet(`<h2>עמלה של ${money(v)}</h2><div class="card"><div class="row"><span>לקופה בצד</span><b>${money(save70)}</b></div><div class="row"><span>שלך, לפינוק</span><b>${money(yours)}</b></div></div>
-        <p class="muted small">את החלק שלך תעביר לחשבון הכיס ותהנה ממנו.</p><button class="btn sage block" id="ok">מאשר, רשום</button>`, sh => {
-        sh.querySelector('#ok').onclick = () => { S.incomes.push(inc); S.savings.push({ id: uid(), ts: Date.now(), amount: save70, note: 'עמלה' }); S.topups.push({ id: uid(), ts: Date.now(), env: 'pocket-bonus', amount: yours, fromCommission: true }); save(); closeSheet(); render(); toast('נרשם'); };
-      });
+/* ---------------- life events: extra money, big expense, lasting change ---------------- */
+
+function openEvents() {
+  openSheet(`<h2>קרה משהו?</h2><p class="muted" style="margin-top:-6px">התוכנית מתעדכנת לבד, ותראה מיד מה זה עושה לתאריכים.</p>
+    <button class="card" style="width:100%;text-align:start" data-act="ev-income"><div class="t" style="font-weight:800;font-size:17px">נכנס כסף נוסף</div><div class="muted small">בונוס, עמלה, מתנה, החזר מס</div></button>
+    <button class="card" style="width:100%;text-align:start" data-act="ev-expense"><div class="t" style="font-weight:800;font-size:17px">הוצאה גדולה שלא תכננתי</div><div class="muted small">תיקון, טיפול רפואי, קנס, משהו שנשבר</div></button>
+    <button class="card" style="width:100%;text-align:start" data-act="ev-change"><div class="t" style="font-weight:800;font-size:17px">משהו השתנה לאורך זמן</div><div class="muted small">העלאה במשכורת, דירה חדשה, חוב חדש, מנוי חדש</div></button>`);
+}
+
+function openIncomeEvent() {
+  const debts = totalDebtLeft() > 0;
+  let kind = 'bonus';
+  openSheet(`<h2>נכנס כסף נוסף</h2>
+    <div class="seg" id="kind"><button class="on" data-k="bonus">בונוס</button><button data-k="commission">עמלה</button><button data-k="gift">מתנה</button><button data-k="other">אחר</button></div>
+    <div class="lbl">כמה נכנס, נטו?</div><input class="field" id="amt" inputmode="decimal" placeholder="סכום" style="font-size:26px;text-align:center;font-weight:800">
+    <div class="lbl">כמה מזה לעצמך, לפינוק?</div><input class="field" id="mine" inputmode="decimal" placeholder="0">
+    <p class="muted small" id="rule" style="margin:6px 2px 0">${debts ? 'לפי הכלל שקבענו: כל עוד יש חובות, הכל הולך לתוכנית. אם בכל זאת בא לך משהו קטן, זה בסדר. תראה למטה כמה זה עולה.' : 'לפי הכלל שקבענו: 30% לך, 70% לקופה.'}</p>
+    <div id="prev"></div><div class="sp"></div><button class="btn sage block" id="ok" disabled style="opacity:.45">מאשר, רשום</button>`, sh => {
+    const amt = sh.querySelector('#amt'), mine = sh.querySelector('#mine'), prev = sh.querySelector('#prev'), ok = sh.querySelector('#ok');
+    setTimeout(() => amt.focus(), 250);
+    sh.querySelectorAll('#kind button').forEach(b => b.onclick = () => { kind = b.dataset.k; sh.querySelectorAll('#kind button').forEach(x => x.classList.toggle('on', x === b)); });
+    let touchedMine = false;
+    mine.addEventListener('input', () => { touchedMine = true; upd(); });
+    amt.addEventListener('input', upd);
+    function parts() {
+      const v = parseFloat(amt.value) || 0;
+      if (!touchedMine && !debts) mine.value = v ? Math.round(v * S.settings.commissionShareAfterDebts) : '';
+      const me = Math.min(v, Math.max(0, parseFloat(mine.value) || 0));
+      return { v, me, plan: v - me };
     }
+    function upd() {
+      const { v, me, plan } = parts();
+      if (!(v > 0)) { prev.innerHTML = ''; ok.disabled = true; ok.style.opacity = .45; return; }
+      const moves = planAllocation(plan), before = forecast();
+      const after = whatIf(() => { S.incomes.push({ id: 'x', ts: Date.now(), amount: v }); if (me > 0) S.topups.push({ id: 'y', ts: Date.now(), env: 'pocket-bonus', amount: me }); applyMoves(moves, ''); });
+      prev.innerHTML = `<div class="card" style="margin-top:12px"><h3>לאן זה הולך</h3>${moves.map(m => `<div class="row" style="padding:4px 0"><span>${m.kind === 'debt' ? 'תשלום ל' : 'הפקדה ל'}${esc(m.name)}</span><b>${money(m.amount)}</b></div>`).join('')}${me ? `<div class="row" style="padding:4px 0"><span>לך, לחשבון הכיס</span><b>${money(me)}</b></div>` : ''}</div>${impactLine(before, after)}`;
+      ok.disabled = false; ok.style.opacity = 1;
+    }
+    ok.onclick = () => {
+      const { v, me, plan } = parts(); if (!(v > 0)) return;
+      const ts = Date.now();
+      S.incomes.push({ id: uid(), ts, amount: v, kind });
+      if (me > 0) S.topups.push({ id: uid(), ts, env: 'pocket-bonus', amount: me, fromCommission: true });
+      applyMoves(planAllocation(plan), { bonus: 'בונוס', commission: 'עמלה', gift: 'מתנה', other: 'כסף נוסף' }[kind]);
+      save(); closeSheet(); render(); toast(me > 0 ? `נרשם. את ה-${stripTags(money(me))} שלך תעביר לחשבון הכיס` : 'נרשם. עכשיו להעביר בבנק לפי הרשימה');
+    };
   });
+}
+
+function openExpenseEvent() {
+  let mode = 'month';
+  openSheet(`<h2>הוצאה גדולה שלא תכננתי</h2><p class="muted" style="margin-top:-6px">קורה לכולם. בשביל זה יש קופה בצד. נרשום את זה ונראה איך התוכנית מתיישרת.</p>
+    <input class="field" id="amt" inputmode="decimal" placeholder="סכום" style="font-size:26px;text-align:center;font-weight:800">
+    <div class="sp"></div><input class="field" id="desc" placeholder="על מה? (למשל: תיקון שיניים)">
+    <div class="lbl">מאיפה משלמים?</div>
+    <div class="seg" id="mode"><button class="on" data-m="month">קודם מהכסף של החודש</button><button data-m="savings">מהקופה בצד</button></div>
+    <div id="prev"></div><div class="sp"></div><button class="btn block" id="ok" disabled style="opacity:.45">רשום</button>`, sh => {
+    const amt = sh.querySelector('#amt'), desc = sh.querySelector('#desc'), prev = sh.querySelector('#prev'), ok = sh.querySelector('#ok');
+    setTimeout(() => amt.focus(), 250);
+    sh.querySelectorAll('#mode button').forEach(b => b.onclick = () => { mode = b.dataset.m; sh.querySelectorAll('#mode button').forEach(x => x.classList.toggle('on', x === b)); upd(); });
+    amt.addEventListener('input', upd);
+    function split(v) {
+      const free = Math.max(0, monthMoney(0).free), sav = Math.max(0, savingsBalance());
+      let fromMonth, fromSav;
+      if (mode === 'month') { fromMonth = Math.min(v, free); fromSav = Math.min(v - fromMonth, sav); }
+      else { fromSav = Math.min(v, sav); fromMonth = 0; }
+      const rest = v - fromMonth - fromSav; // not covered: comes out of the coming months
+      return { fromMonth: fromMonth + rest, fromSav, rest };
+    }
+    function records(v, sp) {
+      const ts = Date.now(), d = desc.value.trim() || 'הוצאה גדולה', out = [];
+      if (sp.fromMonth > 0) out.push({ id: uid(), ts, amount: Math.round(sp.fromMonth), desc: d, cat: 'home', m: ts });
+      const savCat = (S.settings.categories.find(c => c.env === 'savings') || {}).id;
+      if (sp.fromSav > 0 && savCat) out.push({ id: uid(), ts, amount: Math.round(sp.fromSav), desc: d, cat: savCat, m: ts });
+      return out;
+    }
+    function upd() {
+      const v = parseFloat(amt.value) || 0;
+      if (!(v > 0)) { prev.innerHTML = ''; ok.disabled = true; ok.style.opacity = .45; return; }
+      const sp = split(v), before = forecast(), after = whatIf(() => S.expenses.push(...records(v, sp)));
+      prev.innerHTML = `<div class="card" style="margin-top:12px"><h3>ככה זה מתחלק</h3>
+        ${sp.fromMonth - sp.rest > 0 ? `<div class="row" style="padding:4px 0"><span>מהכסף שנשאר החודש</span><b>${money(sp.fromMonth - sp.rest)}</b></div>` : ''}
+        ${sp.fromSav > 0 ? `<div class="row" style="padding:4px 0"><span>מהקופה בצד</span><b>${money(sp.fromSav)}</b></div>` : ''}
+        ${sp.rest > 0 ? `<div class="row" style="padding:4px 0"><span>מהחודשים הבאים</span><b style="color:var(--bad)">${money(sp.rest)}</b></div>` : ''}
+        ${sp.fromSav > 0 ? `<p class="muted small" style="margin:6px 0 0">הקופה תתמלא שוב לבד. היא ראשונה בתור לפני החובות.</p>` : ''}</div>${impactLine(before, after)}`;
+      ok.disabled = false; ok.style.opacity = 1;
+    }
+    ok.onclick = () => {
+      const v = parseFloat(amt.value) || 0; if (!(v > 0)) return;
+      const recs = records(v, split(v));
+      recs.forEach(x => { S.expenses.push(x); markExp(x.id); });
+      save(); closeSheet(); render(); toast('נרשם. התוכנית עודכנה');
+    };
+  });
+}
+
+function openChangeEvent() {
+  openSheet(`<h2>משהו השתנה לאורך זמן</h2><p class="muted" style="margin-top:-6px">מעדכנים את המספר בהגדרות, והתאריכים במסך המטרות מתעדכנים לבד.</p>
+    <div class="card">
+      <div class="set-line"><span>המשכורת עלתה או ירדה</span><button class="btn ghost sm" data-act="go-set" data-v="nums">לעדכן</button></div>
+      <div class="set-line"><span>דירה, מנוי או תשלום קבוע חדש</span><button class="btn ghost sm" data-act="go-set" data-v="bills">לעדכן</button></div>
+      <div class="set-line"><span>חוב חדש, או שסגרת הסדר אחר</span><button class="btn ghost sm" data-act="go-set" data-v="debts">לעדכן</button></div>
+      <div class="set-line"><span>כסף הכיס לא מספיק, או נשאר הרבה</span><button class="btn ghost sm" data-act="go-set" data-v="nums">לעדכן</button></div>
+    </div>
+    <p class="muted small">שינוי חד-פעמי לשבוע אחד, כמו חג או חתונה, עושים בלחיצה על הכרטיס הסגול במסך "היום".</p>`);
+}
+
+/* ---------------- what the app has learned (monthly check-in) ---------------- */
+
+function insights() {
+  const end = weekStart(), start = end - 28 * DAY;
+  const first = S.expenses.length ? Math.min(...S.expenses.map(x => x.ts)) : Infinity;
+  if (first > end - 21 * DAY) return null; // needs about 3 full weeks of data
+  const span = Math.min(28, Math.round((end - Math.max(start, weekStart(first))) / DAY));
+  const weeks = span / 7, perMonth = 365 / 12 / span;
+  const pocket = env('pocket'), pCats = catsOf('pocket');
+  const weekAvg = sum(expIn(end - span * DAY, end, x => pCats.includes(x.cat)), x => x.amount) / weeks;
+  const cats = S.settings.categories.filter(c => c.env === 'pocket' && c.budget > 0).map(c => {
+    const avg = sum(expIn(end - span * DAY, end, x => x.cat === c.id), x => x.amount) * perMonth;
+    return { c, avg, diff: avg - c.budget };
+  }).filter(o => o.avg >= 50 && Math.abs(o.diff) > 100 && Math.abs(o.diff) > o.c.budget * 0.2).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  return { weekAvg, weeks, pocket, cats };
+}
+function viewInsights() {
+  const ins = insights();
+  if (!ins) return '';
+  const { weekAvg, weeks, pocket, cats } = ins;
+  let out = `<div class="card"><h3>מה למדתי עליך</h3><p style="margin:0 0 8px">ב-${Math.round(weeks)} השבועות האחרונים הוצאת בממוצע <b>${money(weekAvg)}</b> בשבוע מכסף הכיס, מתוך ${money(pocket.amount)}.</p>`;
+  const target = Math.round(weekAvg / 50) * 50;
+  if (pocket && weekAvg > pocket.amount * 1.08) {
+    const before = forecast(), after = whatIf(() => { env("pocket").amount = target; });
+    out += `<p class="small muted" style="margin:0 0 8px">אתה עובר את הסכום באופן קבוע. אפשר להמשיך להתאמץ, או להגדיר ${money(target)} בשבוע ולקבל את המחיר בתוכנית: בלי חובות ב${dateLabel(after.debtFree)} במקום ${dateLabel(before.debtFree)}.</p><button class="btn ghost sm" data-act="set-weekly" data-v="${target}">לשנות ל-${money(target)} בשבוע</button>`;
+  } else if (pocket && weekAvg < pocket.amount * 0.85 && weekAvg > 0) {
+    const before = forecast(), after = whatIf(() => { env('pocket').amount = target; });
+    out += `<p class="small muted" style="margin:0 0 8px">נשאר לך כסף בכל שבוע. אם תוריד ל-${money(target)} בשבוע, ההפרש ילך לתוכנית: בלי חובות ב${dateLabel(after.debtFree)} במקום ${dateLabel(before.debtFree)}. אפשר גם להשאיר ככה וליהנות.</p><button class="btn ghost sm" data-act="set-weekly" data-v="${target}">להוריד ל-${money(target)} בשבוע</button>`;
+  }
+  if (cats.length) out += `<div class="sp"></div>${cats.slice(0, 3).map(o => `<div class="set-line"><span class="small">${esc(o.c.name)}: בערך ${money(o.avg)} בחודש, היעד ${money(o.c.budget)}</span><button class="btn ghost sm" data-act="set-budget" data-v="${o.c.id}" data-d="${Math.round(o.avg / 50) * 50}">לעדכן יעד</button></div>`).join('')}<p class="muted small">היעדים לפי קטגוריה עוזרים לראות לאן הולך הכסף. הם לא משנים את הסכום השבועי.</p>`;
+  return out + `</div>`;
 }
 
 /* Backup */
@@ -776,7 +918,13 @@ document.addEventListener('click', e => {
     case 'month-nav': UI.monthOffset = Math.min(0, UI.monthOffset + parseInt(v, 10)); render(); break;
     case 'check': { const it = monthItems(UI.monthOffset).find(i => i.id === v); if (it) { toggleCheck(UI.monthOffset, it); render(); } break; }
     case 'allocate-month': { const mm = monthMoney(0); if (mm.free > 0) showAllocation(Math.round(mm.free), 'הכסף של החודש', 'יתרה חודשית'); break; }
-    case 'income': onIncome(); break;
+    case 'income': case 'ev-income': openIncomeEvent(); break;
+    case 'events': openEvents(); break;
+    case 'ev-expense': openExpenseEvent(); break;
+    case 'ev-change': openChangeEvent(); break;
+    case 'go-set': closeSheet(); UI.tab = 'settings'; render(); { const h = { nums: 0, bills: 1, debts: 2 }[v]; const cards = document.querySelectorAll('#app .card'); if (cards[h]) cards[h].scrollIntoView({ behavior: 'smooth', block: 'start' }); } break;
+    case 'set-weekly': { const e = env('pocket'); e.amount = +v; save(); render(); toast('עודכן. התאריכים במסך המטרות התעדכנו'); break; }
+    case 'set-budget': { const c = cat(v); c.budget = +b.dataset.d; save(); render(); toast('היעד עודכן'); break; }
     case 'topup': askAmount({ title: 'הוספה לקופת בגדים', sub: 'יוצא מהכסף שנשאר החודש' }, a => { S.topups.push({ id: uid(), ts: Date.now(), env: 'clothes', amount: a }); save(); closeSheet(); render(); toast('נוסף לקופת הבגדים'); }); break;
     case 'saving': { const sign = parseInt(v, 10); askAmount({ title: sign > 0 ? 'הפקדה לקופה' : 'משיכה מהקופה', sub: sign < 0 ? 'רק למקרה חירום אמיתי.' : '', note: true }, (a, note) => { S.savings.push({ id: uid(), ts: Date.now(), amount: sign * a, note }); save(); closeSheet(); render(); toast('נרשם'); }); break; }
     case 'pay-debt': { const d = debt(v); askAmount({ title: `תשלום ל${d.name}`, sub: `נשארו ${stripTags(money(debtLeft(v)))}`, initial: d.monthly || '' }, a => { S.debtPays.push({ id: uid(), ts: Date.now(), debtId: v, amount: Math.min(a, debtLeft(v)) }); save(); closeSheet(); render(); toast(debtLeft(v) <= 0 ? `סגרת את החוב ל${d.name}` : 'נרשם'); }); break; }
@@ -862,6 +1010,10 @@ if (navigator.storage && navigator.storage.persist) navigator.storage.persist().
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 (function migrate() {
   S.migr = S.migr || {};
+  if (!S.migr.fromsav && S.setup) {
+    if (!S.settings.categories.some(c => c.env === 'savings')) S.settings.categories.push({ id: 'fromsav', name: 'מהקופה בצד', env: 'savings', budget: 0, color: '#6b5a80' });
+    S.migr.fromsav = true; save();
+  }
   if (!S.migr.transitionWeek && S.setup && S.settings.startMonth === new Date(2026, 9, 1).getTime()) {
     const ws = String(new Date(2026, 8, 27).getTime());
     S.settings.weekOverrides = S.settings.weekOverrides || {};

@@ -1,5 +1,5 @@
 // Offline shell. Bump VERSION on every deploy so phones pick up the new files.
-const VERSION = 'v4';
+const VERSION = 'v5';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', 'scriptable.js'];
 
 self.addEventListener('install', e => {
