@@ -36,8 +36,11 @@ function fresh() {
   return {
     v: 1, setup: false, settings: clone(DEFAULT_SETTINGS),
     expenses: [], debtPays: [], savings: [], incomes: [], topups: [],
-    checks: {}, learn: {}, lastBackup: 0, created: Date.now()
+    checks: {}, learn: {}, lastBackup: 0, created: Date.now(),
+    cloud: null, sync: freshSync()
   };
+}
+function freshSync() { return { since: null, dirty: {}, tomb: [], docDirty: false, lastOk: 0, lastErr: '' };
 }
 
 let S = load();
@@ -47,7 +50,9 @@ function load() {
   try { const raw = localStorage.getItem(KEY); if (raw) return Object.assign(fresh(), JSON.parse(raw)); } catch (e) {}
   return fresh();
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('שגיאה בשמירה'); } }
+function persist() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('שגיאה בשמירה'); } }
+function save() { if (S.cloud) S.sync.docDirty = true; persist(); scheduleSync(); }
+function markExp(id) { if (S.cloud) S.sync.dirty[id] = true; }
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 const sum = (arr, f = x => x) => arr.reduce((a, x) => a + (+f(x) || 0), 0);
@@ -200,6 +205,79 @@ function forecast() {
   return { debtFree, goal };
 }
 
+/* ---------------- cloud sync ---------------- */
+// Phone is the source of truth for everything except expenses logged from the widget.
+// Expenses sync both ways (last edit wins); the rest of the state is pushed as one document.
+
+function docOf() {
+  const { expenses, sync, cloud, ...rest } = S;
+  const f = forecast();
+  rest.summary = { debtLeft: Math.round(totalDebtLeft()), debtTotal: totalDebt(), debtFree: f.debtFree ? monthOnly(f.debtFree) + ' ' + new Date(f.debtFree).getFullYear() : null, savings: Math.round(savingsBalance()), savingsGoal: S.settings.savingsGoal, at: Date.now() };
+  return rest;
+}
+async function rpc(fn, body = {}) {
+  const c = S.cloud;
+  const r = await fetch(`${c.url}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { apikey: c.anon, Authorization: `Bearer ${c.anon}`, 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ p_key: c.key }, body)) });
+  if (!r.ok) throw new Error((await r.text()).slice(0, 160));
+  return r.json();
+}
+let syncing = false, syncAgain = false, syncTimer = null;
+function scheduleSync(ms = 1200) { if (!S.cloud) return; clearTimeout(syncTimer); syncTimer = setTimeout(sync, ms); }
+async function sync() {
+  if (!S.cloud) return;
+  if (syncing) { syncAgain = true; return; }
+  syncing = true;
+  try {
+    const sy = S.sync;
+    const ids = Object.keys(sy.dirty);
+    const exps = ids.map(id => S.expenses.find(x => x.id === id)).filter(Boolean).map(x => ({ ...x, m: x.m || Date.now() }));
+    const tomb = sy.tomb.slice();
+    tomb.forEach(t => exps.push({ ...t, deleted: true }));
+    const pushDoc = sy.docDirty;
+    if (exps.length || pushDoc) {
+      sy.docDirty = false;
+      try { await rpc('mf_push', { p_doc: pushDoc ? docOf() : null, p_expenses: exps }); }
+      catch (e) { if (pushDoc) sy.docDirty = true; throw e; }
+      ids.forEach(id => delete sy.dirty[id]);
+      sy.tomb = sy.tomb.filter(t => !tomb.includes(t));
+    }
+    const p = await rpc('mf_pull', { p_since_ms: sy.since ? sy.since - 120000 : null });
+    let changed = false;
+    for (const e of p.expenses) {
+      const i = S.expenses.findIndex(x => x.id === e.id);
+      if (sy.dirty[e.id]) continue;
+      if (e.deleted) { if (i >= 0) { S.expenses.splice(i, 1); changed = true; } continue; }
+      const x = { id: e.id, ts: +e.ts, amount: +e.amount, desc: e.desc || '', cat: e.cat, m: +e.m };
+      if (i < 0) { if (!sy.tomb.some(t => t.id === e.id)) { S.expenses.push(x); learnFrom(x); changed = true; } }
+      else { const o = S.expenses[i]; if ((o.m || 0) <= x.m && (o.amount !== x.amount || o.cat !== x.cat || o.desc !== x.desc || o.ts !== x.ts)) { S.expenses[i] = x; changed = true; } }
+    }
+    sy.since = p.now; sy.lastOk = Date.now(); sy.lastErr = '';
+    if (changed) sy.docDirty = true; // widget summary follows new expenses
+    persist();
+    if (changed && !UI.sheet) render();
+  } catch (e) {
+    S.sync.lastErr = navigator.onLine === false ? 'אין אינטרנט' : String(e.message || e).slice(0, 120); persist();
+  } finally {
+    syncing = false;
+    if (syncAgain || S.sync.docDirty && S.sync.lastErr === '') { syncAgain = false; scheduleSync(400); }
+  }
+}
+async function connectCloud(cloud) {
+  S.cloud = cloud; S.sync = freshSync(); persist();
+  const p = await rpc('mf_pull', {});
+  if (p.rev > 0 && p.doc && p.doc.settings && !S.expenses.length && !S.debtPays.length) {
+    // new phone: take everything from the cloud
+    const keep = { cloud: S.cloud, sync: S.sync };
+    S = Object.assign(fresh(), p.doc, keep, { setup: true, expenses: [] });
+    delete S.summary;
+  } else {
+    S.expenses.forEach(x => S.sync.dirty[x.id] = true);
+    S.sync.docDirty = true;
+  }
+  persist();
+  await sync();
+}
+
 /* ---------------- learning (quick-add suggestions) ---------------- */
 
 function learnFrom(x) {
@@ -331,12 +409,25 @@ function viewToday() {
     out += `<div class="grid2">${minis.map(({ e, st }) => `<div class="card mini"><div class="l">${esc(e.name)}${e.type === 'monthly' ? ' · החודש' : ''}</div><div class="v">${money(st.left)}</div><div class="l">מתוך ${money(st.of)}</div></div>`).join('')}</div><div class="sp"></div>`;
   }
 
+  out += tiles();
   out += alerts().join('');
 
   const today = expIn(dayStart(), dayStart() + DAY).sort((a, b) => b.ts - a.ts);
   out += `<div class="card"><div class="row"><h3 style="margin:0">היום</h3><span class="muted small">${today.length ? money(sum(today, x => x.amount)) : ''}</span></div>
     ${today.length ? `<ul class="list" style="margin-top:6px">${today.map(x => expenseItem(x)).join('')}</ul>` : `<div class="empty">עוד לא נרשמו הוצאות היום.<br>לחיצה על הפלוס למטה, וזה לוקח שלוש שניות.</div>`}</div>`;
   return out;
+}
+
+function tiles() {
+  const ws = weekStart(), ms = monthStart();
+  const cats = S.settings.categories.filter(c => c.env !== 'none');
+  if (!cats.length) return '';
+  return `<div class="tiles">${cats.map(c => {
+    const weekly = c.env === 'pocket';
+    const spent = sum(expIn(weekly ? ws : ms, Infinity, x => x.cat === c.id), x => x.amount);
+    const wb = weekly && c.budget ? c.budget * 12 / 52 : 0;
+    return `<button class="tile" style="--c:${c.color}" data-act="tile" data-v="${c.id}"><span class="tn">${esc(c.name)}</span><span class="ta">${money(spent)}</span>${wb ? `<span class="tb"><i style="width:${Math.max(0, Math.min(100, (1 - spent / wb) * 100))}%"></i></span>` : `<span class="ts">${weekly ? 'השבוע' : 'החודש'}</span>`}</button>`;
+  }).join('')}</div>`;
 }
 
 function alerts() {
@@ -486,6 +577,24 @@ function viewSettings() {
     <div class="row"><span>הכנסה</span>${money(st.income)}</div><div class="row"><span>תשלומים קבועים</span>${money(-billsMonthly())}</div><div class="row"><span>כסף הכיס (ממוצע חודשי)</span>${money(-pocketMonthly())}</div><div class="row"><span>חובות קבועים</span>${money(-dm)}</div>
     <div class="row" style="font-weight:800;margin-top:6px"><span>נשאר לחובות ולחיסכון</span>${money(bf - dm)}</div></div>`;
 
+  if (S.cloud) {
+    const sy = S.sync;
+    out += `<div class="card"><h3>ענן</h3><p class="small" style="margin-top:0">${sy.lastErr ? `<span style="color:var(--bad)">הסנכרון האחרון נכשל: ${esc(sy.lastErr)}</span>` : sy.lastOk ? `מסונכרן · ${dayLabel(sy.lastOk)} ${timeLabel(sy.lastOk)}` : 'עוד לא סונכרן'}${Object.keys(sy.dirty).length ? ` · ${Object.keys(sy.dirty).length} מחכות לעלות` : ''}</p>
+      <div class="row"><button class="btn ghost sm" data-act="sync-now">סנכרון עכשיו</button><button class="btn danger sm" data-act="disconnect">ניתוק</button></div></div>
+      <div class="card"><h3>ווידג'ט במסך הבית</h3>
+      <ol class="small" style="padding-inline-start:18px;margin:0 0 12px;line-height:1.7">
+        <li>להוריד מה-App Store את האפליקציה החינמית <b>Scriptable</b>.</li>
+        <li>ללחוץ כאן על "העתקת קוד לווידג'ט".</li>
+        <li>לפתוח את Scriptable, ללחוץ על הפלוס למעלה, להדביק, ולקרוא לסקריפט <b>הכסף שלי</b> (לחיצה על השם למעלה).</li>
+        <li>במסך הבית: לחיצה ארוכה, הוספת ווידג'ט, Scriptable, לבחור גודל בינוני. אחר כך לחיצה ארוכה על הווידג'ט, "עריכת ווידג'ט", ובשדה Script לבחור "הכסף שלי".</li>
+        <li>בונוס: בהגדרות האייפון, כפתור הפעולה (Action Button), לבחור קיצור דרך שמריץ את הסקריפט "הכסף שלי". ככה לחיצה על הכפתור בצד פותחת רישום הוצאה.</li>
+      </ol>
+      <button class="btn block" data-act="copy-script">העתקת קוד לווידג'ט</button>
+      <p class="muted small">בקוד יש מפתח סודי. לא לשלוח אותו לאף אחד.</p></div>`;
+  } else {
+    out += `<div class="card"><h3>חיבור לענן ולווידג'ט</h3><p class="muted small" style="margin-top:0">הדבק את קוד החיבור שקיבלת. הנתונים שבאייפון יעלו לענן, ואז אפשר להוסיף ווידג'ט ולרשום הוצאות גם בלי לפתוח את האפליקציה.</p>
+      <textarea class="field" id="cloud-code" placeholder="קוד חיבור"></textarea><div class="sp"></div><button class="btn block" data-act="cloud-code">התחברות</button></div>`;
+  }
   out += `<div class="card"><h3>גיבוי</h3><p class="muted small" style="margin-top:0">הנתונים שמורים רק באייפון. כדאי לגבות פעם בשבועיים (לשלוח לעצמך בוואטסאפ או לשמור בקבצים).</p>
     <div class="row"><button class="btn sm" data-act="backup">גיבוי עכשיו</button><button class="btn ghost sm" data-act="restore">שחזור מגיבוי</button></div>
     ${S.lastBackup ? `<p class="muted small">גיבוי אחרון: ${dayLabel(S.lastBackup)}</p>` : ''}</div>
@@ -545,7 +654,8 @@ function renderAdd() {
 function saveExpense() {
   const amount = Math.round((parseFloat(D.amountStr) || 0) * 100) / 100;
   if (!(amount > 0) || !D.cat) return;
-  const x = { id: D.id, ts: D.ts, amount, desc: (D.desc || '').trim(), cat: D.cat };
+  const x = { id: D.id, ts: D.ts, amount, desc: (D.desc || '').trim(), cat: D.cat, m: Date.now() };
+  markExp(x.id);
   const i = S.expenses.findIndex(e => e.id === x.id);
   if (i >= 0) S.expenses[i] = x; else S.expenses.push(x);
   learnFrom(x); save(); closeSheet(); render();
@@ -620,10 +730,12 @@ function decodeSetup(code) {
   return JSON.parse(json);
 }
 function applySetup(o) {
+  if (!o.settings && o.cloud) { S.setup = true; persist(); return connectCloud(o.cloud); }
   S.settings = Object.assign(clone(DEFAULT_SETTINGS), o.settings || {});
   if (o.savings) S.savings.push({ id: uid(), ts: Date.now(), amount: o.savings, note: 'יתרת פתיחה', opening: true });
   for (const t of o.topups || []) S.topups.push({ id: uid(), ts: Math.max(Date.now(), t.ts || 0), env: t.env, amount: t.amount });
   S.setup = true; save();
+  if (o.cloud) return connectCloud(o.cloud);
 }
 
 /* Settings edits: data-set="path.to.value" */
@@ -657,7 +769,8 @@ document.addEventListener('click', e => {
     case 'sugg': { const l = S.learn[v.toLowerCase()]; if (l) { D.desc = l.desc; D.cat = l.cat; if (!parseFloat(D.amountStr)) D.amountStr = String(l.amount); } renderAdd(); break; }
     case 'when': { const t = new Date(Date.now()); if (v === '1') t.setDate(t.getDate() - 1); D.ts = t.getTime(); renderAdd(); break; }
     case 'save-exp': saveExpense(); break;
-    case 'del-exp': S.expenses = S.expenses.filter(x => x.id !== D.id); save(); closeSheet(); render(); toast('נמחק'); break;
+    case 'del-exp': { const old = S.expenses.find(x => x.id === D.id); if (old && S.cloud) { S.sync.tomb.push({ id: old.id, ts: old.ts, amount: old.amount, cat: old.cat, desc: '', m: Date.now() }); delete S.sync.dirty[old.id]; } }
+      S.expenses = S.expenses.filter(x => x.id !== D.id); save(); closeSheet(); render(); toast('נמחק'); break;
     case 'hist-cat': UI.histCat = v || null; render(); break;
     case 'month-nav': UI.monthOffset = Math.min(0, UI.monthOffset + parseInt(v, 10)); render(); break;
     case 'check': { const it = monthItems(UI.monthOffset).find(i => i.id === v); if (it) { toggleCheck(UI.monthOffset, it); render(); } break; }
@@ -691,7 +804,23 @@ document.addEventListener('click', e => {
       const i = pri.indexOf(v); if (i > 0) { [pri[i - 1], pri[i]] = [pri[i], pri[i - 1]]; st.priority = pri; save(); render(); }
       break;
     }
-    case 'setup-code': { try { applySetup(decodeSetup(document.getElementById('setup-code').value)); render(); toast('התוכנית נטענה'); } catch (err) { toast('הקוד לא תקין. נסה להדביק שוב'); } break; }
+    case 'setup-code': { try { const pr = applySetup(decodeSetup(document.getElementById('setup-code').value)); render(); toast('התוכנית נטענה'); if (pr) pr.then(() => { render(); toast('מחובר לענן'); }).catch(() => { render(); toast('לא הצלחתי להתחבר לענן. ננסה שוב אחר כך'); }); } catch (err) { toast('הקוד לא תקין. נסה להדביק שוב'); } break; }
+    case 'cloud-code': {
+      let o; try { o = decodeSetup(document.getElementById('cloud-code').value); } catch (err) { toast('הקוד לא תקין'); break; }
+      if (!o.cloud) { toast('בקוד הזה אין פרטי ענן'); break; }
+      toast('מתחבר…');
+      connectCloud(o.cloud).then(() => { render(); toast(S.sync.lastErr ? 'החיבור נכשל: ' + S.sync.lastErr : 'מחובר. הנתונים עלו לענן'); }).catch(e => { S.cloud = null; persist(); render(); toast('החיבור נכשל'); });
+      break;
+    }
+    case 'sync-now': sync().then(() => { render(); toast(S.sync.lastErr ? 'לא הצליח: ' + S.sync.lastErr : 'מסונכרן'); }); break;
+    case 'copy-script': {
+      if (!SCRIPT_TPL) { toast('רגע, טוען…'); loadScriptTpl(); break; }
+      const code = SCRIPT_TPL.replace('__URL__', S.cloud.url).replace('__ANON__', S.cloud.anon).replace('__KEY__', S.cloud.key);
+      navigator.clipboard.writeText(code).then(() => toast('הקוד הועתק. עכשיו לפתוח את Scriptable'), () => openSheet(`<h2>קוד לווידג'ט</h2><p class="muted">סמן הכל והעתק:</p><textarea class="field" style="min-height:260px">${esc(code)}</textarea>`));
+      break;
+    }
+    case 'disconnect': S.cloud = null; S.sync = freshSync(); persist(); render(); toast('נותק מהענן'); break;
+    case 'tile': openAdd(); D.cat = v; D.catTouched = true; renderAdd(); break;
     case 'setup-blank': S.setup = true; save(); UI.tab = 'settings'; render(); break;
   }
 });
@@ -720,4 +849,8 @@ function seed() {
 applyHash();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
-document.addEventListener('visibilitychange', () => { if (!document.hidden && !UI.sheet) render(); });
+let SCRIPT_TPL = null;
+function loadScriptTpl() { fetch('scriptable.js').then(r => r.ok ? r.text() : null).then(t => { if (t) SCRIPT_TPL = t; }).catch(() => {}); }
+if (S.cloud) { loadScriptTpl(); scheduleSync(300); }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (!UI.sheet) render(); scheduleSync(200); } });
+window.addEventListener('online', () => scheduleSync(200));
