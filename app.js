@@ -109,6 +109,8 @@ function envStatus(e, now = Date.now()) {
   return { spent, left: inn - spent, of: inn };
 }
 
+/* Monthly payment due in the month starting at t (a debt can start its payments later: d.from). */
+function monthlyDue(d, t) { return d.from && t < monthStart(d.from) ? 0 : (d.monthly || 0); }
 function debtPaid(id, before = Infinity) { return sum(S.debtPays.filter(p => p.debtId === id && p.ts < before), p => p.amount); }
 function debtLeft(id, before = Infinity) { const d = debt(id); return d ? Math.max(0, d.total - debtPaid(id, before)) : 0; }
 function totalDebtLeft() { return sum(S.settings.debts, d => debtLeft(d.id)); }
@@ -156,7 +158,7 @@ function monthMoney(off = 0) {
   let committed = 0, regularDue = 0;
   for (const d of S.settings.debts) {
     const leftAtStart = debtLeft(d.id, a);
-    const due = Math.min(d.monthly || 0, leftAtStart);
+    const due = Math.min(monthlyDue(d, a), leftAtStart);
     const paid = sum(S.debtPays.filter(p => p.debtId === d.id && inRange(p.ts, a, b)), p => p.amount);
     regularDue += due;
     committed += Math.max(due, paid);
@@ -225,13 +227,13 @@ function forecast() {
       // this month: pending regular payments still go out, plus whatever is unassigned
       for (const d of S.settings.debts) {
         const paidNow = sum(S.debtPays.filter(p => p.debtId === d.id && p.ts >= t), p => p.amount);
-        const pending = Math.max(0, Math.min(d.monthly || 0, debtLeft(d.id, t)) - paidNow);
+        const pending = Math.max(0, Math.min(monthlyDue(d, t), debtLeft(d.id, t)) - paidNow);
         dl[d.id] = Math.max(0, dl[d.id] - pending);
       }
       pool = cur.free;
     } else {
       pool = baseFree();
-      for (const d of S.settings.debts) { const x = Math.min(d.monthly || 0, dl[d.id]); dl[d.id] -= x; pool -= x; }
+      for (const d of S.settings.debts) { const x = Math.min(monthlyDue(d, t), dl[d.id]); dl[d.id] -= x; pool -= x; }
     }
     pool += carry; carry = 0;
     if (pool < 0) { carry = pool; pool = 0; }
@@ -343,7 +345,7 @@ function monthItems(off = 0) {
   if (!planStarted(a)) return items;
   for (const b of S.settings.bills) items.push({ id: 'bill:' + b.id, name: b.name, amount: b.amount, day: b.day, kind: 'bill' });
   for (const c of S.settings.cashIncome || []) items.push({ id: 'cashin:' + c.id, name: c.name, amount: c.amount, day: c.day, kind: 'cashin' });
-  for (const d of S.settings.debts) if ((d.monthly || 0) > 0 && debtLeft(d.id, a) > 0) items.push({ id: 'debt:' + d.id, name: d.name, amount: Math.min(d.monthly, debtLeft(d.id, a)), day: d.day, kind: 'debt', debtId: d.id });
+  for (const d of S.settings.debts) if (monthlyDue(d, a) > 0 && debtLeft(d.id, a) > 0) items.push({ id: 'debt:' + d.id, name: d.name, amount: Math.min(monthlyDue(d, a), debtLeft(d.id, a)), day: d.day, kind: 'debt', debtId: d.id });
   items.sort((x, y) => (x.day || 0) - (y.day || 0));
   items.push({ id: 'routine:review', name: 'בדיקה חודשית של 20 דקות', day: 1, kind: 'routine' });
   return items;
@@ -600,7 +602,7 @@ function viewGoals() {
   // debts
   for (const d of st.debts) {
     const l = debtLeft(d.id), p = d.total ? (1 - l / d.total) * 100 : 100;
-    out += `<div class="card"><div class="row"><h3 style="margin:0;color:var(--ink);font-size:17px">${esc(d.name)}</h3><span class="muted small">${l <= 0 ? 'סגור' : d.monthly ? `${money(d.monthly)} ב-${d.day} לחודש${d.noExtra ? ', רק בתשלומים' : ''}` : 'בלי מועד קבוע'}</span></div>
+    out += `<div class="card"><div class="row"><h3 style="margin:0;color:var(--ink);font-size:17px">${esc(d.name)}</h3><span class="muted small">${l <= 0 ? 'סגור' : d.monthly ? `${money(d.monthly)} ב-${d.day} לחודש${d.from && Date.now() < monthStart(d.from) ? `, מ${monthOnly(d.from)}` : ''}` : 'בלי מועד קבוע'}</span></div>
       <div class="row" style="margin-top:6px"><span class="big-num" style="font-size:24px">${l <= 0 ? 'סגרת' : money(l)}</span><span class="muted small">${l > 0 ? `מתוך ${money(d.total)}` : ''}</span></div>
       <div class="bar"><i style="width:${p}%"></i></div>
       ${l > 0 ? `<button class="btn ghost sm" data-act="pay-debt" data-v="${d.id}">רישום תשלום</button>` : ''}</div>`;
