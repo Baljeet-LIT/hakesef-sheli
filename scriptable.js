@@ -155,6 +155,7 @@ function buildWidget(d) {
   w.addSpacer();
   const s = d.summary || {};
   if (s.debtLeft > 0) rightText(w, `חובות: נשארו ${fmt(s.debtLeft)}${s.debtFree ? ` · בלי חובות ב${s.debtFree}` : ''}`, Font.systemFont(12), C.muted);
+  else if (s.invest != null) rightText(w, `בתיק ההשקעות: ${fmt(s.invest)}`, Font.systemFont(12), C.muted);
   else if (s.savings != null) rightText(w, `בקופה בצד: ${fmt(s.savings)}`, Font.systemFont(12), C.muted);
   if (d.cash != null) rightText(w, `בארנק: ${fmt(d.cash)}`, Font.systemFont(12), C.muted);
   (d.monthly || []).forEach(m => rightText(w, `${m.name} החודש: נשארו ${fmt(m.left)}`, Font.systemFont(12), C.muted));
@@ -182,10 +183,11 @@ async function quickLog(d) {
   a.addTextField('על מה? (לא חובה)', '');
   a.addAction('שמירה · כרטיס');
   a.addAction(`שמירה · מזומן${d.cash != null ? ` (בארנק ${fmt(d.cash)})` : ''}`);
+  if (d.wolt_of > 0) a.addAction(`שמירה · וולט (קרדיט ${fmt(Math.max(0, d.wolt_left))})`);
   a.addCancelAction('ביטול');
   const choice = await a.presentAlert();
   if (choice < 0) return;
-  const method = choice === 1 ? 'cash' : 'card';
+  const method = ['card', 'cash', 'wolt'][choice] || 'card';
   const amount = parseFloat(String(a.textFieldValue(0)).replace(',', '.'));
   if (!(amount > 0)) { const e = new Alert(); e.title = 'לא נרשם'; e.message = 'צריך סכום גדול מאפס.'; e.addAction('אוקיי'); await e.present(); return; }
   const res = await rpc('mf_quick_add', { p_amount: amount, p_cat: cat.id, p_desc: a.textFieldValue(1) || '', p_method: method });
