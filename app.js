@@ -719,11 +719,9 @@ function renderAdd() {
     else if (c.env === 'reimb') hint = 'לא יורד מהשבוע. נחכה שיחזירו לך';
     else hint = 'יורד מחשבון הבית, לא מכסף הכיס';
   } else if (st) hint = `נשאר השבוע: ${money(st.left)}`;
-  const sugg = suggestions(D.desc).filter(s => s.desc !== D.desc);
   const isYesterday = dayStart(D.ts) === dayStart() - DAY;
   el.innerHTML = `
     <div class="row"><h2>${D.editing ? 'עריכת הוצאה' : 'הוצאה חדשה'}</h2><div class="seg" style="width:150px"><button class="${!isYesterday ? 'on' : ''}" data-act="when" data-v="0">היום</button><button class="${isYesterday ? 'on' : ''}" data-act="when" data-v="1">אתמול</button></div></div>
-    ${sugg.length ? `<div class="chips scroll" style="margin-bottom:8px">${sugg.map(s => `<button class="chip" data-act="sugg" data-v="${esc(s.desc)}">${esc(s.desc)}<span class="a num">${Math.round(s.amount)}</span></button>`).join('')}</div>` : ''}
     <div class="amount-display ${amt ? '' : 'zero'}"><span class="num">${D.amountStr || '0'}</span><span class="cur">₪</span></div>
     <div class="hint">${hint}</div>
     <input class="field" id="desc" placeholder="על מה? (לא חובה)" value="${esc(D.desc)}" autocomplete="off" enterkeyhint="done">
