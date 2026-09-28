@@ -109,8 +109,12 @@ function envStatus(e, now = Date.now()) {
   return { spent, left: inn - spent, of: inn };
 }
 
-/* Monthly payment due in the month starting at t (a debt can start its payments later: d.from). */
-function monthlyDue(d, t) { return d.from && t < monthStart(d.from) ? 0 : (d.monthly || 0); }
+/* Monthly payment due in the month starting at t. A debt can start later (d.from) or change amount (d.steps: [{from, monthly}]). */
+function monthlyDue(d, t) {
+  if (d.from && t < monthStart(d.from)) return 0;
+  const step = (d.steps || []).filter(x => t >= monthStart(x.from)).sort((a, b) => b.from - a.from)[0];
+  return step ? step.monthly : (d.monthly || 0);
+}
 function debtPaid(id, before = Infinity) { return sum(S.debtPays.filter(p => p.debtId === id && p.ts < before), p => p.amount); }
 function debtLeft(id, before = Infinity) { const d = debt(id); return d ? Math.max(0, d.total - debtPaid(id, before)) : 0; }
 function totalDebtLeft() { return sum(S.settings.debts, d => debtLeft(d.id)); }
@@ -602,7 +606,8 @@ function viewGoals() {
   // debts
   for (const d of st.debts) {
     const l = debtLeft(d.id), p = d.total ? (1 - l / d.total) * 100 : 100;
-    out += `<div class="card"><div class="row"><h3 style="margin:0;color:var(--ink);font-size:17px">${esc(d.name)}</h3><span class="muted small">${l <= 0 ? 'סגור' : d.monthly ? `${money(d.monthly)} ב-${d.day} לחודש${d.from && Date.now() < monthStart(d.from) ? `, מ${monthOnly(d.from)}` : ''}` : 'בלי מועד קבוע'}</span></div>
+    out += `<div class="card"><div class="row"><h3 style="margin:0;color:var(--ink);font-size:17px">${esc(d.name)}</h3><span class="muted small">${l <= 0 ? 'סגור' : (() => { const now = monthlyDue(d, monthStart()), next = (d.steps || []).concat(d.from ? [{ from: d.from, monthly: d.monthly }] : []).filter(x => monthStart(x.from) > monthStart()).sort((a, b) => a.from - b.from)[0];
+        return now ? `${money(now)} ב-${d.day} לחודש${next ? `, מ${monthOnly(next.from)} ${stripTags(money(next.monthly))}` : ''}` : next ? `${money(next.monthly)} ב-${d.day} לחודש, מ${monthOnly(next.from)}` : 'בלי מועד קבוע'; })()}</span></div>
       <div class="row" style="margin-top:6px"><span class="big-num" style="font-size:24px">${l <= 0 ? 'סגרת' : money(l)}</span><span class="muted small">${l > 0 ? `מתוך ${money(d.total)}` : ''}</span></div>
       <div class="bar"><i style="width:${p}%"></i></div>
       ${l > 0 ? `<button class="btn ghost sm" data-act="pay-debt" data-v="${d.id}">רישום תשלום</button>` : ''}</div>`;
@@ -649,7 +654,7 @@ function viewSettings() {
     ${st.categories.map((c, i) => `<div class="form-row" style="grid-template-columns:1fr 90px 1fr 36px"><input data-set="categories.${i}.name" value="${esc(c.name)}"><input inputmode="decimal" data-set="categories.${i}.budget" value="${c.budget || 0}"><select class="field" style="padding:8px" data-set="categories.${i}.env">${[...st.envelopes.map(e => [e.id, e.name]), ['none', 'חשבון הבית'], ['savings', 'הקופה בצד'], ['reimb', 'אף אחד (יחזירו לי)']].map(([v, n]) => `<option value="${v}" ${c.env === v ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select><button class="x" data-act="del-row" data-v="categories.${i}">×</button></div>`).join('')}
     <button class="btn ghost sm" data-act="add-row" data-v="categories">הוספת קטגוריה</button></div>`;
 
-  const bf = baseFree(), dm = sum(st.debts.filter(d => debtLeft(d.id) > 0), d => d.monthly || 0);
+  const bf = baseFree(), dm = sum(st.debts.filter(d => debtLeft(d.id) > 0), d => monthlyDue(d, monthStart()));
   out += `<div class="card"><h3>החשבון החודשי</h3>
     <div class="row"><span>הכנסה</span>${money(st.income)}</div><div class="row"><span>תשלומים קבועים</span>${money(-billsMonthly())}</div><div class="row"><span>כסף הכיס (ממוצע חודשי)</span>${money(-pocketMonthly())}</div><div class="row"><span>חובות קבועים</span>${money(-dm)}</div>
     <div class="row" style="font-weight:800;margin-top:6px"><span>נשאר לחובות ולחיסכון</span>${money(bf - dm)}</div></div>`;
