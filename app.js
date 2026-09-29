@@ -678,7 +678,8 @@ function viewGoals() {
     <div class="sp"></div><button class="btn ghost sm" data-act="invest">רישום הפקדה לתיק</button></div>`;
 
   // debts
-  for (const d of st.debts) {
+  const closed = st.debts.filter(d => debtLeft(d.id) <= 0);
+  for (const d of st.debts.filter(d => debtLeft(d.id) > 0)) {
     const l = debtLeft(d.id), p = d.total ? (1 - l / d.total) * 100 : 100;
     out += `<div class="card"><div class="row"><h3 style="margin:0;color:var(--ink);font-size:17px">${esc(d.name)}</h3><span class="muted small">${l <= 0 ? 'סגור' : (() => { const now = monthlyDue(d, monthStart()), next = (d.steps || []).concat(d.from ? [{ from: d.from, monthly: d.monthly }] : []).filter(x => monthStart(x.from) > monthStart()).sort((a, b) => a.from - b.from)[0];
         return now ? `${money(now)} ב-${d.day} לחודש${next ? `, מ${monthOnly(next.from)} ${stripTags(money(next.monthly))}` : ''}` : next ? `${money(next.monthly)} ב-${d.day} לחודש, מ${monthOnly(next.from)}` : 'בלי מועד קבוע'; })()}</span></div>
@@ -686,6 +687,7 @@ function viewGoals() {
       <div class="bar"><i style="width:${p}%"></i></div>
       ${l > 0 ? `<button class="btn ghost sm" data-act="pay-debt" data-v="${d.id}">שילמתי</button>` : ''}</div>`;
   }
+  if (closed.length) out += `<div class="card"><div class="row"><h3 style="margin:0">חובות שסגרת</h3><span style="color:var(--sage);font-weight:700">${money(sum(closed, d => d.total))}</span></div><div class="muted small" style="margin-top:4px">${closed.map(d => esc(d.name)).join(' · ')}</div></div>`;
   if (!st.debts.length) out += `<div class="card"><div class="empty">לא הוגדרו חובות. אפשר להוסיף בהגדרות.</div></div>`;
 
   // recent moves
@@ -754,11 +756,11 @@ function settingsSection(sec) {
       <button class="btn ghost sm" data-act="add-row" data-v="bills">הוספת תשלום</button></div>${note('מה שיוצא מחשבון הבית כל חודש: דירה, חשבונות, מנויים.')}`;
     case 'cashIncome': return `<div class="card">${(st.cashIncome || []).map((b, i) => editBlock('cashIncome', i, b.name, [['סכום', 'amount', b.amount], ['יום בחודש', 'day', b.day || '', 'numeric']])).join('') || '<div class="empty">אין</div>'}
       <button class="btn ghost sm" data-act="add-row" data-v="cashIncome">הוספה</button></div>${note('חלק מההכנסה שמגיע במזומן. כשמסמנים שהגיע, הוא נכנס לארנק.')}`;
-    case 'debts': return `<div class="card">${st.debts.map((d, i) => editBlock('debts', i, d.name, [['סכום התחלתי', 'total', d.total], ['בחודש', 'monthly', d.monthly || 0], ['יום', 'day', d.day || '', 'numeric']], debtLeft(d.id) > 0 ? `נשאר עכשיו ${stripTags(money(debtLeft(d.id)))}${d.noExtra ? ' · תשלום קבוע, בלי תוספות' : ''}` : 'סגור')).join('') || '<div class="empty">אין חובות</div>'}
+    case 'debts': return `<div class="card">${st.debts.map((d, i) => [d, i]).sort((a, b) => (debtLeft(a[0].id) <= 0) - (debtLeft(b[0].id) <= 0)).map(([d, i]) => editBlock('debts', i, d.name, [['סכום התחלתי', 'total', d.total], ['בחודש', 'monthly', d.monthly || 0], ['יום', 'day', d.day || '', 'numeric']], debtLeft(d.id) > 0 ? `נשאר עכשיו ${stripTags(money(debtLeft(d.id)))}${d.noExtra ? ' · תשלום קבוע, בלי תוספות' : ''}` : 'סגור')).join('') || '<div class="empty">אין חובות</div>'}
       <button class="btn ghost sm" data-act="add-row" data-v="debts">הוספת חוב</button></div>${note('"סכום התחלתי" הוא החוב ביום שהגדרת אותו. כל תשלום שנרשם יורד ממנו לבד, אז לא צריך לעדכן אותו.')}`;
     case 'priority': {
       const names = { emergency: 'קופת חירום' }; st.debts.forEach(d => names[d.id] = d.name);
-      const pri = [...st.priority.filter(p => names[p]), ...st.debts.map(d => d.id).filter(id => !st.priority.includes(id))].filter(p => !debt(p)?.noExtra);
+      const pri = [...st.priority.filter(p => names[p]), ...st.debts.map(d => d.id).filter(id => !st.priority.includes(id))].filter(p => !debt(p)?.noExtra && (p === 'emergency' || debtLeft(p) > 0));
       return `<div class="card">${pri.map((p, i) => `<div class="set-line"><span>${i + 1}. ${esc(names[p])}${p !== 'emergency' && debtLeft(p) <= 0 ? '<small>סגור</small>' : ''}</span><button class="btn ghost sm" data-act="pri" data-v="${p}" ${i === 0 ? 'disabled style="opacity:.3"' : ''}>למעלה</button></div>`).join('')}
         <div class="set-line"><span>${pri.length + 1}. תיק ההשקעות<small>כשכל השאר מלא</small></span></div></div>${note('כסף שנשאר בסוף החודש, בונוסים ועמלות הולכים לפי הסדר הזה. חובות עם תשלום קבוע בלי ריבית לא מופיעים כאן.')}`;
     }
@@ -1343,7 +1345,8 @@ document.addEventListener('click', e => {
     case 'del-row': { const [k, i] = v.split('.'), it = S.settings[k][+i]; if ((k === 'debts' || k === 'categories') && it.name && !confirm(`למחוק את "${it.name}"?`)) break; S.settings[k].splice(+i, 1); save(); render(); break; }
     case 'pri': {
       const st = S.settings, names = ['emergency', ...st.debts.map(d => d.id)];
-      const pri = [...st.priority.filter(p => names.includes(p)), ...st.debts.map(d => d.id).filter(id => !st.priority.includes(id))];
+      const all = [...st.priority.filter(p => names.includes(p)), ...st.debts.map(d => d.id).filter(id => !st.priority.includes(id))];
+      const done = p => p !== 'emergency' && (debt(p)?.noExtra || debtLeft(p) <= 0), pri = [...all.filter(p => !done(p)), ...all.filter(done)];
       const i = pri.indexOf(v); if (i > 0) { [pri[i - 1], pri[i]] = [pri[i], pri[i - 1]]; st.priority = pri; save(); render(); }
       break;
     }
