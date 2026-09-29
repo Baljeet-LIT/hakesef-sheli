@@ -17,8 +17,8 @@ const DEFAULT_SETTINGS = {
     { id: 'super', name: 'סופר ובית', env: 'pocket', budget: 900, color: '#6f9169' },
     { id: 'fun', name: 'בילויים', env: 'pocket', budget: 1200, color: '#8a5bb0' },
     { id: 'misc', name: 'שונות', env: 'pocket', budget: 930, color: '#8c8273' },
-    { id: 'home', name: 'מחשבון הבית', env: 'none', budget: 0, color: '#5a4175' },
-    { id: 'fromsav', name: 'מהקופה בצד', env: 'savings', budget: 0, color: '#6b5a80' },
+    { id: 'home', name: 'חד פעמי · לא מהשבוע', env: 'none', budget: 0, color: '#5a4175' },
+    { id: 'fromsav', name: 'מקופת החירום', env: 'savings', budget: 0, color: '#6b5a80' },
     { id: 'reimb', name: 'יחזירו לי', env: 'reimb', budget: 0, color: '#b08a2e' },
   ],
   bills: [],                     // {id,name,amount,day}
@@ -580,7 +580,7 @@ function viewToday() {
     const perDay = st.left / daysLeft;
     const pct = Math.max(0, Math.min(100, (st.left / st.of) * 100));
     let msg;
-    if (st.left < 0) msg = `עברת את השבוע ב-${money(-st.left)}. מהיום עד יום ראשון מחכים, בלי למשוך מחשבון הבית.`;
+    if (st.left < 0) msg = `עברת את השבוע ב-${money(-st.left)}. מהיום עד יום ראשון מחכים, בלי לקחת עוד מהבנק.`;
     else if (daysLeft === 1) msg = `זה היום האחרון של השבוע. מחר נכנסים ${money(st.of)} חדשים.`;
     else msg = `עוד ${daysLeft} ימים עד יום ראשון · בערך ${money(perDay)} ליום`;
     out += `<div class="card hero ${cls}" data-act="week-edit">
@@ -836,7 +836,7 @@ function settingsSection(sec) {
       ${line('יעד קופת חירום', 'emergencyGoal', st.emergencyGoal, 'אחריו הכסף הולך להשקעות')}</div>
       ${note('שינוי לשבוע אחד בלבד (חג, אירוע) עושים בלחיצה על הכרטיס הסגול במסך "היום".')}`;
     case 'bills': return `<div class="card">${st.bills.map((b, i) => editBlock('bills', i, b.name, [['סכום', 'amount', b.amount], ['יום בחודש', 'day', b.day || '', 'numeric']])).join('') || '<div class="empty">אין תשלומים קבועים</div>'}
-      <button class="btn ghost sm" data-act="add-row" data-v="bills">הוספת תשלום</button></div>${note('מה שיוצא מחשבון הבית כל חודש: דירה, חשבונות, מנויים.')}`;
+      <button class="btn ghost sm" data-act="add-row" data-v="bills">הוספת תשלום</button></div>${note('מה שיוצא ממך כל חודש בתאריך קבוע, כמו חשבונות ומנויים. שכר הדירה לא כאן: הוא יורד מהמשכורת לפני שהיא מגיעה אלייך.')}`;
     case 'cashIncome': return `<div class="card">${(st.cashIncome || []).map((b, i) => editBlock('cashIncome', i, b.name, [['סכום', 'amount', b.amount], ['יום בחודש', 'day', b.day || '', 'numeric']])).join('') || '<div class="empty">אין</div>'}
       <button class="btn ghost sm" data-act="add-row" data-v="cashIncome">הוספה</button></div>${note('חלק מההכנסה שמגיע במזומן. כשמסמנים שהגיע, הוא נכנס לארנק.')}`;
     case 'debts': return `<div class="card">${st.debts.map((d, i) => [d, i]).sort((a, b) => (debtLeft(a[0].id) <= 0) - (debtLeft(b[0].id) <= 0)).map(([d, i]) => editBlock('debts', i, d.name, [['סכום התחלתי', 'total', d.total], ['בחודש', 'monthly', d.monthly || 0], ['יום', 'day', d.day || '', 'numeric']], debtLeft(d.id) > 0 ? `נשאר עכשיו ${stripTags(money(debtLeft(d.id)))}${d.noExtra ? ' · תשלום קבוע, בלי תוספות' : ''}` : 'סגור')).join('') || '<div class="empty">אין חובות</div>'}
@@ -1610,7 +1610,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.ser
 (function migrate() {
   S.migr = S.migr || {};
   if (!S.migr.fromsav && S.setup) {
-    if (!S.settings.categories.some(c => c.env === 'savings')) S.settings.categories.push({ id: 'fromsav', name: 'מהקופה בצד', env: 'savings', budget: 0, color: '#6b5a80' });
+    if (!S.settings.categories.some(c => c.env === 'savings')) S.settings.categories.push({ id: 'fromsav', name: 'מקופת החירום', env: 'savings', budget: 0, color: '#6b5a80' });
     S.migr.fromsav = true; save();
   }
   if (!S.migr.transitionWeek && S.setup && S.settings.startMonth === new Date(2026, 9, 1).getTime()) {
