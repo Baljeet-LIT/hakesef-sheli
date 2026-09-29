@@ -214,3 +214,10 @@ textarea.field{min-height:90px;font-size:13px;direction:ltr}
 .eb-grid input,.eb-grid select{width:100%;border:1.5px solid var(--line);background:var(--card);border-radius:10px;padding:9px 8px;min-width:0;text-align:center}
 .eb-grid select{text-align:start;padding:8px}
 .steps{padding-inline-start:18px;margin:0 0 12px;line-height:1.7}
+
+/* accounts */
+.accts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 12px}
+.acct{display:flex;flex-direction:column;align-items:flex-start;gap:2px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px 14px;box-shadow:var(--shadow);text-align:start}
+.acct span{font-size:13px;color:var(--muted);font-weight:600}
+.acct b{font-size:19px}
+.acct:active{transform:scale(.98)}
