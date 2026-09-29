@@ -116,9 +116,11 @@ input,select,textarea{font:inherit;font-size:16px;color:var(--ink)}
 .fab:active{transform:translateY(-14px) scale(.94)}
 
 /* sheet */
-.backdrop{position:fixed;inset:0;background:rgba(20,12,30,.45);z-index:40;animation:fade .18s ease}
-.sheet{position:fixed;inset-inline:0;bottom:0;max-height:94vh;overflow-y:auto;background:var(--bg);border-radius:26px 26px 0 0;z-index:41;padding:10px 16px calc(var(--safe-b) + 16px);animation:up .22s cubic-bezier(.2,.8,.2,1);-webkit-overflow-scrolling:touch}
-.sheet .grab{width:42px;height:5px;border-radius:9px;background:var(--line);margin:0 auto 10px}
+.backdrop{position:fixed;inset:0;background:rgba(20,12,30,.45);z-index:40;animation:fade .18s ease;touch-action:none}
+.sheet{position:fixed;inset-inline:0;bottom:0;max-height:calc(100vh - var(--safe-t) - 12px);overflow-y:auto;overscroll-behavior:contain;background:var(--bg);border-radius:26px 26px 0 0;z-index:41;padding:0 16px calc(var(--safe-b) + 16px);animation:up .22s cubic-bezier(.2,.8,.2,1);-webkit-overflow-scrolling:touch}
+.sheet-head{position:sticky;top:0;z-index:2;height:38px;margin:0 -16px 4px;display:flex;align-items:center;justify-content:center;background:var(--bg)}
+.sheet .grab{width:42px;height:5px;border-radius:9px;background:var(--line)}
+.sheet-x{position:absolute;inset-inline-end:10px;top:4px;width:32px;height:32px;border-radius:99px;background:var(--plum-soft);color:var(--muted);font-size:22px;line-height:1;display:grid;place-items:center}
 .sheet h2{margin:2px 0 12px;font-size:20px}
 @keyframes up{from{transform:translateY(100%)}to{transform:none}}
 @keyframes fade{from{opacity:0}to{opacity:1}}

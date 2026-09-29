@@ -125,6 +125,7 @@ function cashAnchor() { return (S.cash || []).filter(c => c.kind === 'count').so
 function cashBalance() {
   const a = cashAnchor(); if (!a) return null;
   return a.amount + sum((S.cash || []).filter(c => (c.kind === 'withdraw' || c.kind === 'in') && c.ts > a.ts), c => c.amount)
+    - sum((S.cash || []).filter(c => c.kind === 'out' && c.ts > a.ts), c => c.amount)
     - sum(S.expenses.filter(x => x.method === 'cash' && x.ts > a.ts), x => x.amount);
 }
 /* Wolt is a payment method with a monthly credit from work. Only what goes past the credit hits the budget. */
@@ -296,7 +297,8 @@ async function sync() {
       if (sy.dirty[e.id]) continue;
       if (e.deleted) { if (i >= 0) { S.expenses.splice(i, 1); changed = true; } continue; }
       const x = { id: e.id, ts: +e.ts, amount: +e.amount, desc: e.desc || '', cat: e.cat, method: e.method === 'cash' || e.method === 'wolt' ? e.method : 'card', m: +e.m };
-      if (i < 0) { if (!sy.tomb.some(t => t.id === e.id)) { S.expenses.push(x); learnFrom(x); changed = true; } }
+      if (e.source === 'applepay') x.src = 'applepay';
+      if (i < 0) { if (!sy.tomb.some(t => t.id === e.id)) { S.expenses.push(x); if (x.src) sortApplePay(x); else learnFrom(x); changed = true; } }
       else { const o = S.expenses[i]; if ((o.m || 0) <= x.m && (o.amount !== x.amount || o.cat !== x.cat || o.desc !== x.desc || o.ts !== x.ts || (o.method || 'card') !== x.method)) { S.expenses[i] = x; changed = true; } }
     }
     sy.since = p.now; sy.lastOk = Date.now(); sy.lastErr = '';
@@ -325,6 +327,17 @@ async function connectCloud(cloud) {
   persist();
   await sync();
 }
+
+/* ---------------- Apple Pay (logged by the iPhone automation) ---------------- */
+// A merchant the app already knows gets its usual category. Unknown ones wait on the home screen for a category.
+function sortApplePay(x) {
+  const L = S.learn[x.desc.trim().toLowerCase()];
+  if (!L || !S.settings.categories.some(c => c.id === L.cat)) return;
+  if (L.cat !== x.cat) { x.cat = L.cat; x.m = Date.now(); markExp(x.id); }
+  seenApplePay(x); learnFrom(x);
+}
+function seenApplePay(x) { S.apSeen = S.apSeen || {}; S.apSeen[x.id] = 1; }
+function unsortedApplePay() { return S.expenses.filter(x => x.src === 'applepay' && !(S.apSeen || {})[x.id] && x.ts > Date.now() - 45 * DAY).sort((a, b) => b.ts - a.ts); }
 
 /* ---------------- learning (quick-add suggestions) ---------------- */
 
@@ -360,7 +373,7 @@ function toggleCheck(off, item) {
   S.checks[key] = S.checks[key] || {};
   const cur = S.checks[key][item.id];
   if (cur) {
-    if (cur.payId) S.debtPays = S.debtPays.filter(p => p.id !== cur.payId);
+    if (cur.payId) removeDebtPay(cur.payId);
     if (cur.cashId) S.cash = (S.cash || []).filter(c => c.id !== cur.cashId);
     delete S.checks[key][item.id];
   } else {
@@ -379,6 +392,65 @@ function toggleCheck(off, item) {
     S.checks[key][item.id] = rec;
   }
   save();
+}
+
+/* ---------------- debt payments ---------------- */
+// A payment comes from the home account (transfer / standing order) or from the wallet.
+// Paying marks that month's payment as done, so the reminder stops.
+
+function removeDebtPay(id) {
+  const p = S.debtPays.find(x => x.id === id);
+  S.debtPays = S.debtPays.filter(x => x.id !== id);
+  if (p && p.cashId) S.cash = (S.cash || []).filter(c => c.id !== p.cashId);
+  for (const m in S.checks) for (const c in S.checks[m]) if (S.checks[m][c].payId === id) delete S.checks[m][c];
+}
+function openPayDebt(debtId, off = 0) {
+  const d = debt(debtId); if (!d) return;
+  const a = monthStart(Date.now(), off), b = monthStart(Date.now(), off + 1), key = ym(a), itemId = 'debt:' + debtId;
+  const item = monthItems(off).find(i => i.id === itemId);
+  const open = !!item && !isChecked(key, itemId);
+  let from = d.payFrom === 'cash' ? 'cash' : 'home';
+  openSheet(`<h2>תשלום ל${esc(d.name)}</h2><p class="muted" style="margin-top:-6px">נשארו ${money(debtLeft(debtId))}${open ? ` · התשלום של ${monthOnly(a)} עוד לא סומן` : ''}</p>
+    <input class="field" id="amt" inputmode="decimal" placeholder="סכום" value="${open ? item.amount : ''}" style="font-size:26px;text-align:center;font-weight:800">
+    <div class="lbl">מאיפה שילמת?</div>
+    <div class="seg" id="from"><button data-f="home">מחשבון הבית<small>העברה או הוראת קבע</small></button><button data-f="cash">במזומן<small>${cashBalance() != null ? `בארנק ${stripTags(money(cashBalance()))}` : 'מהארנק'}</small></button></div>
+    <p class="muted small" id="expl" style="margin:8px 2px 0"></p>
+    <div class="sp"></div><button class="btn sage block" id="ok">שילמתי</button>`, sh => {
+    const amt = sh.querySelector('#amt'), expl = sh.querySelector('#expl');
+    if (!open) setTimeout(() => amt.focus(), 250);
+    const ts = off === 0 ? Date.now() : b - 1;
+    const upd = () => {
+      sh.querySelectorAll('#from button').forEach(x => x.classList.toggle('on', x.dataset.f === from));
+      const v = Math.min(parseFloat(amt.value) || 0, debtLeft(debtId));
+      if (from === 'cash') {
+        const cb = cashBalance();
+        expl.innerHTML = cb == null ? 'יוצא מהארנק. עוד לא ספרת את הארנק, אז זה יופיע ביתרה אחרי הספירה הראשונה.' : `יוצא מהארנק. יישאר בארנק: ${money(cb - v)}`;
+        return;
+      }
+      if (!(v > 0)) { expl.innerHTML = 'יוצא מחשבון הבית.'; return; }
+      const before = monthMoney(off).free;
+      S.debtPays.push({ id: '_sim', ts, debtId, amount: v });
+      const after = monthMoney(off).free;
+      S.debtPays.pop();
+      expl.innerHTML = Math.round(after) === Math.round(before)
+        ? 'יוצא מחשבון הבית. זה התשלום החודשי, והוא כבר שמור בצד מהמשכורת, אז "כסף בלי תפקיד" לא משתנה.'
+        : `יוצא מחשבון הבית. ${money(before - after)} מעבר לתשלום החודשי יורדים מ"כסף בלי תפקיד" של החודש.`;
+    };
+    sh.querySelectorAll('#from button').forEach(x => x.onclick = () => { from = x.dataset.f; upd(); });
+    amt.addEventListener('input', upd); upd();
+    sh.querySelector('#ok').onclick = () => {
+      const v = Math.min(Math.round((parseFloat(amt.value) || 0) * 100) / 100, debtLeft(debtId));
+      if (!(v > 0)) { amt.focus(); return; }
+      const p = { id: uid(), ts, debtId, amount: v, from };
+      if (open) p.note = 'תשלום חודשי';
+      if (from === 'cash') { S.cash = S.cash || []; const c = { id: uid(), ts, kind: 'out', amount: v, note: `תשלום ל${d.name}` }; S.cash.push(c); p.cashId = c.id; }
+      S.debtPays.push(p);
+      if (open) { S.checks[key] = S.checks[key] || {}; S.checks[key][itemId] = { ts: Date.now(), payId: p.id }; }
+      d.payFrom = from;
+      save(); closeSheet(); render();
+      toast(debtLeft(debtId) <= 0 ? `סגרת את החוב ל${d.name}` : from === 'cash' && cashBalance() != null ? `נרשם · בארנק ${stripTags(money(cashBalance()))}` : 'נרשם · יצא מחשבון הבית');
+    };
+  });
 }
 
 /* ---------------- icons ---------------- */
@@ -418,7 +490,7 @@ function header(title, sub = '') {
 function expenseItem(x, showDay = false) {
   const c = cat(x.cat);
   return `<li class="item" data-act="edit" data-id="${x.id}"><div class="cdot" style="background:${c.color}">${esc(c.name[0])}</div>
-    <div class="main"><div class="n">${esc(x.desc || c.name)}</div><div class="s">${esc(c.name)}${x.method === 'cash' ? ' · מזומן' : x.method === 'wolt' ? ' · וולט' : ''}${c.env === 'reimb' ? (pendingReimb().some(p => p.id === x.id) ? ' · מחכה להחזר' : ' · הוחזר') : ''} · ${showDay ? dayLabel(x.ts) + ' · ' : ''}${timeLabel(x.ts)}</div></div>
+    <div class="main"><div class="n">${esc(x.desc || c.name)}</div><div class="s">${esc(c.name)}${x.method === 'cash' ? ' · מזומן' : x.method === 'wolt' ? ' · וולט' : x.src === 'applepay' ? ' · אפל פיי' : ''}${c.env === 'reimb' ? (pendingReimb().some(p => p.id === x.id) ? ' · מחכה להחזר' : ' · הוחזר') : ''} · ${showDay ? dayLabel(x.ts) + ' · ' : ''}${timeLabel(x.ts)}</div></div>
     <div class="amt">${money(x.amount)}</div></li>`;
 }
 
@@ -462,6 +534,8 @@ function viewToday() {
   out += `<button class="card slim" data-act="wallet"><span>בארנק</span><b>${cb == null ? 'לספור' : money(cb)}</b></button>`;
 
   out += alerts().join('');
+  const ap = unsortedApplePay();
+  if (ap.length) out += `<div class="card"><div class="row"><h3 style="margin:0">מאפל פיי · לבחור קטגוריה</h3><button class="btn ghost sm" data-act="ap-ok">הכל נכון</button></div><p class="muted small" style="margin:4px 0 0">מקומות חדשים. לחיצה כדי לתקן. מהפעם הבאה זה ייכנס לבד לקטגוריה הנכונה.</p><ul class="list" style="margin-top:4px">${ap.slice(0, 5).map(x => expenseItem(x, true)).join('')}</ul></div>`;
   const pend = pendingReimb();
   if (pend.length) out += `<button class="card reimb" data-act="receive" data-v="reimb" style="width:100%;text-align:start"><div class="row"><h3 style="margin:0">מחכה שיחזירו לך</h3><b>${money(sum(pend, x => x.amount))}</b></div><div class="muted small" style="margin-top:4px">${pend.slice(0, 3).map(x => `${esc(x.desc || cat(x.cat).name)} · ${dayLabel(x.ts)}`).join('<br>')}${pend.length > 3 ? `<br>ועוד ${pend.length - 3}` : ''}</div><div class="small" style="margin-top:8px;font-weight:700;color:var(--plum)">החזירו? לחיצה כדי לסמן</div></button>`;
 
@@ -563,7 +637,7 @@ function viewMonth() {
   const items = monthItems(off), today = new Date(Date.now()).getDate();
   out += `<div class="card"><h3>תשלומים ושגרה</h3>${items.length ? items.map(i => {
     const done = isChecked(key, i.id), late = !done && off === 0 && i.day && i.day < today;
-    return `<button class="check ${done ? 'done' : ''} ${late ? 'late' : ''}" data-act="check" data-v="${esc(i.id)}"><span class="box">${done ? I.check : ''}</span><span class="main"><div class="n">${esc(i.name)}</div><div class="s">${i.day ? 'ב-' + i.day + ' לחודש' : ''}${late ? ' · עבר המועד' : ''}${i.kind === 'debt' ? ' · נרשם כתשלום חוב' : ''}${i.kind === 'cashin' ? ' · נכנס לארנק' : ''}</div></span>${i.amount ? `<span class="amt">${money(i.amount)}</span>` : ''}</button>`;
+    return `<button class="check ${done ? 'done' : ''} ${late ? 'late' : ''}" data-act="check" data-v="${esc(i.id)}"><span class="box">${done ? I.check : ''}</span><span class="main"><div class="n">${esc(i.name)}</div><div class="s">${i.day ? 'ב-' + i.day + ' לחודש' : ''}${late ? ' · עבר המועד' : ''}${i.kind === 'debt' ? (done ? (p => p ? ` · שולם ${p.from === 'cash' ? 'במזומן' : 'מחשבון הבית'}` : '')(S.debtPays.find(p => p.id === S.checks[key][i.id].payId)) : ' · לחיצה כשמשלמים') : ''}${i.kind === 'cashin' ? ' · נכנס לארנק' : ''}</div></span>${i.amount ? `<span class="amt">${money(i.amount)}</span>` : ''}</button>`;
   }).join('') : '<div class="empty">אין תשלומים קבועים. אפשר להוסיף בהגדרות.</div>'}</div>`;
 
   // money left to assign
@@ -610,7 +684,7 @@ function viewGoals() {
         return now ? `${money(now)} ב-${d.day} לחודש${next ? `, מ${monthOnly(next.from)} ${stripTags(money(next.monthly))}` : ''}` : next ? `${money(next.monthly)} ב-${d.day} לחודש, מ${monthOnly(next.from)}` : 'בלי מועד קבוע'; })()}</span></div>
       <div class="row" style="margin-top:6px"><span class="big-num" style="font-size:24px">${l <= 0 ? 'סגרת' : money(l)}</span><span class="muted small">${l > 0 ? `מתוך ${money(d.total)}` : ''}</span></div>
       <div class="bar"><i style="width:${p}%"></i></div>
-      ${l > 0 ? `<button class="btn ghost sm" data-act="pay-debt" data-v="${d.id}">רישום תשלום</button>` : ''}</div>`;
+      ${l > 0 ? `<button class="btn ghost sm" data-act="pay-debt" data-v="${d.id}">שילמתי</button>` : ''}</div>`;
   }
   if (!st.debts.length) out += `<div class="card"><div class="empty">לא הוגדרו חובות. אפשר להוסיף בהגדרות.</div></div>`;
 
@@ -673,7 +747,18 @@ function viewSettings() {
         <li>בונוס: בהגדרות האייפון, כפתור הפעולה (Action Button), לבחור קיצור דרך שמריץ את הסקריפט "הכסף שלי". ככה לחיצה על הכפתור בצד פותחת רישום הוצאה.</li>
       </ol>
       <button class="btn block" data-act="copy-script">העתקת קוד לווידג'ט</button>
-      <p class="muted small">בקוד יש מפתח סודי. לא לשלוח אותו לאף אחד.</p></div>`;
+      <p class="muted small">בקוד יש מפתח סודי. לא לשלוח אותו לאף אחד.</p></div>
+      <div class="card"><h3>רישום אוטומטי מאפל פיי</h3>
+      <p class="small" style="margin-top:0">כל תשלום באייפון או בשעון נרשם לבד, ומגיעה התראה קטנה עם כמה נשאר לשבוע. צריך את הווידג'ט מלמעלה מותקן.</p>
+      <ol class="small" style="padding-inline-start:18px;margin:0 0 12px;line-height:1.7">
+        <li>אם הווידג'ט הותקן לפני היום: ללחוץ שוב על "העתקת קוד לווידג'ט", ובתוך Scriptable למחוק את הקוד הישן ולהדביק את החדש.</li>
+        <li>לפתוח את אפליקציית <b>קיצורים</b>, לשונית <b>אוטומציה</b>, פלוס, ולבחור <b>עסקה</b> (Transaction).</li>
+        <li>לסמן רק את הכרטיסים שלך, ולבחור <b>הפעלה מיידית</b>. הבא.</li>
+        <li>אוטומציה ריקה חדשה. להוסיף פעולה <b>טקסט</b>. בתוכה: המשתנה <b>סכום</b> (Amount), ירידת שורה, והמשתנה <b>סוחר</b> (Merchant).</li>
+        <li>להוסיף פעולה של Scriptable בשם <b>Run Script</b>. לבחור את "הכסף שלי", ובשדה Parameter לבחור את הטקסט מהשלב הקודם. לכבות את Run In App.</li>
+        <li>לשלם פעם אחת באפל פיי ולבדוק שמגיעה התראה.</li>
+      </ol>
+      <p class="muted small">מקום שהאפליקציה מכירה נכנס לבד לקטגוריה הנכונה. מקום חדש מופיע במסך "היום" כדי לבחור לו קטגוריה, פעם אחת. תשלום באפל פיי לא צריך לרשום ידנית.</p></div>`;
   } else {
     out += `<div class="card"><h3>חיבור לענן ולווידג'ט</h3><p class="muted small" style="margin-top:0">הדבק את קוד החיבור שקיבלת. הנתונים שבאייפון יעלו לענן, ואז אפשר להוסיף ווידג'ט ולרשום הוצאות גם בלי לפתוח את האפליקציה.</p>
       <textarea class="field" id="cloud-code" placeholder="קוד חיבור"></textarea><div class="sp"></div><button class="btn block" data-act="cloud-code">התחברות</button></div>`;
@@ -690,11 +775,45 @@ function viewSettings() {
 /* ---------------- sheets ---------------- */
 
 const root = document.getElementById('sheet-root');
-function openSheet(html, onMount) {
-  root.innerHTML = `<div class="backdrop" data-act="close"></div><div class="sheet" role="dialog"><div class="grab"></div>${html}</div>`;
-  UI.sheet = true; onMount && onMount(root.querySelector('.sheet'));
+let lockY = null; // page scroll while a sheet is open: the page is pinned so it can't be dragged behind the sheet
+function lockPage() {
+  if (lockY != null) return;
+  lockY = window.scrollY;
+  Object.assign(document.body.style, { position: 'fixed', top: `-${lockY}px`, left: '0', right: '0', overflow: 'hidden' });
 }
-function closeSheet() { root.innerHTML = ''; UI.sheet = null; }
+function unlockPage() {
+  if (lockY == null) return;
+  Object.assign(document.body.style, { position: '', top: '', left: '', right: '', overflow: '' });
+  window.scrollTo(0, lockY); lockY = null;
+}
+function openSheet(html, onMount) {
+  root.innerHTML = `<div class="backdrop" data-act="close"></div><div class="sheet" role="dialog"><div class="sheet-head"><div class="grab"></div><button class="sheet-x" data-act="close" aria-label="סגירה">×</button></div>${html}</div>`;
+  UI.sheet = true; lockPage();
+  const sh = root.querySelector('.sheet');
+  dragToClose(sh);
+  onMount && onMount(sh);
+}
+function closeSheet() { root.innerHTML = ''; UI.sheet = null; unlockPage(); }
+/* Pull the sheet down to close it (only when it's scrolled to the top). */
+function dragToClose(sh) {
+  let y0 = null, dy = 0, dragging = false;
+  sh.addEventListener('touchstart', e => { y0 = sh.scrollTop <= 0 ? e.touches[0].clientY : null; dy = 0; dragging = false; }, { passive: true });
+  sh.addEventListener('touchmove', e => {
+    if (y0 == null) return;
+    dy = e.touches[0].clientY - y0;
+    if (!dragging && dy > 10) { dragging = true; sh.style.transition = 'none'; document.activeElement && document.activeElement.blur && document.activeElement.blur(); }
+    if (!dragging) { if (dy < 0) y0 = null; return; }
+    e.preventDefault();
+    sh.style.transform = `translateY(${Math.max(0, dy - 10)}px)`;
+  }, { passive: false });
+  sh.addEventListener('touchend', () => {
+    if (!dragging) { y0 = null; return; }
+    sh.style.transition = 'transform .2s ease';
+    if (dy > 110) { sh.style.transform = 'translateY(100%)'; setTimeout(() => { if (root.contains(sh)) closeSheet(); }, 180); }
+    else sh.style.transform = '';
+    y0 = null; dragging = false;
+  });
+}
 
 /* Quick add / edit */
 let D = null; // draft
@@ -719,6 +838,8 @@ function renderAdd() {
     else if (c.env === 'reimb') hint = 'לא יורד מהשבוע. נחכה שיחזירו לך';
     else hint = 'יורד מחשבון הבית, לא מכסף הכיס';
   } else if (st) hint = `נשאר השבוע: ${money(st.left)}`;
+  const twin = !D.editing && amt > 0 && D.method === 'card' && S.expenses.find(x => x.src === 'applepay' && Math.abs(x.amount - amt) < 0.01 && Date.now() - x.ts < 3 * 3600000);
+  if (twin) hint = `כבר נרשם מאפל פיי: ${esc(twin.desc || cat(twin.cat).name)}, ${timeLabel(twin.ts)}. אין צורך לרשום שוב.`;
   const isYesterday = dayStart(D.ts) === dayStart() - DAY;
   el.innerHTML = `
     <div class="row"><h2>${D.editing ? 'עריכת הוצאה' : 'הוצאה חדשה'}</h2><div class="seg" style="width:150px"><button class="${!isYesterday ? 'on' : ''}" data-act="when" data-v="0">היום</button><button class="${isYesterday ? 'on' : ''}" data-act="when" data-v="1">אתמול</button></div></div>
@@ -747,7 +868,8 @@ function saveExpense() {
   const amount = Math.round((parseFloat(D.amountStr) || 0) * 100) / 100;
   if (!(amount > 0) || !D.cat) return;
   const x = { id: D.id, ts: D.ts, amount, desc: (D.desc || '').trim(), cat: D.cat, method: D.method === 'cash' || D.method === 'wolt' ? D.method : 'card', m: Date.now() };
-  S.lastMethod = x.method;
+  if (D.src) { x.src = D.src; seenApplePay(x); }
+  if (!D.editing || !D.src) S.lastMethod = x.method;
   markExp(x.id);
   const i = S.expenses.findIndex(e => e.id === x.id);
   if (i >= 0) S.expenses[i] = x; else S.expenses.push(x);
@@ -926,7 +1048,7 @@ function openWallet() {
   const bal = cashBalance(), a = cashAnchor();
   const since = a ? a.ts : 0;
   const moves = [
-    ...(S.cash || []).filter(c => c.ts >= since).map(c => ({ ts: c.ts, t: c.kind === 'count' ? 'ספירת ארנק' : c.kind === 'in' ? (c.note || 'קיבלתי מזומן') : 'משיכה מכספומט', a: c.kind === 'count' ? c.amount : c.amount, sign: c.kind === 'count' ? '=' : '+', id: c.id })),
+    ...(S.cash || []).filter(c => c.ts >= since).map(c => ({ ts: c.ts, t: c.kind === 'count' ? 'ספירת ארנק' : c.kind === 'in' ? (c.note || 'קיבלתי מזומן') : c.kind === 'out' ? (c.note || 'תשלום במזומן') : 'משיכה מכספומט', a: c.amount, sign: c.kind === 'count' ? '=' : c.kind === 'out' ? '-' : '+', id: c.id })),
     ...S.expenses.filter(x => x.method === 'cash' && x.ts > since).map(x => ({ ts: x.ts, t: x.desc || cat(x.cat).name, a: x.amount, sign: '-' })),
   ].sort((p, q) => q.ts - p.ts).slice(0, 15);
   openSheet(`<h2>הארנק</h2>
@@ -1171,7 +1293,7 @@ document.addEventListener('click', e => {
     case 'hist-cat': UI.histCat = v || null; render(); break;
     case 'month-nav': UI.monthOffset = Math.min(0, UI.monthOffset + parseInt(v, 10)); render(); break;
     case 'check-now': { const it = monthItems(0).find(i => i.id === v); if (it && !isChecked(ym(), it.id)) { toggleCheck(0, it); render(); toast(cashBalance() != null ? `בארנק: ${stripTags(money(cashBalance()))}` : 'נרשם'); } break; }
-    case 'check': { const it = monthItems(UI.monthOffset).find(i => i.id === v); if (it) { toggleCheck(UI.monthOffset, it); render(); } break; }
+    case 'check': { const it = monthItems(UI.monthOffset).find(i => i.id === v); if (!it) break; if (it.kind === 'debt' && !isChecked(ym(monthStart(Date.now(), UI.monthOffset)), it.id)) openPayDebt(it.debtId, UI.monthOffset); else { toggleCheck(UI.monthOffset, it); render(); } break; }
     case 'allocate-month': { const mm = monthMoney(0); if (mm.free > 0) showAllocation(Math.round(mm.free), 'הכסף של החודש', 'יתרה חודשית'); break; }
     case 'income': case 'ev-income': openIncomeEvent(); break;
     case 'events': openEvents(); break;
@@ -1182,10 +1304,10 @@ document.addEventListener('click', e => {
     case 'set-budget': { const c = cat(v); c.budget = +b.dataset.d; save(); render(); toast('היעד עודכן'); break; }
     case 'saving': { const sign = parseInt(v, 10); askAmount({ title: sign > 0 ? 'הפקדה לקופה' : 'משיכה מהקופה', sub: sign < 0 ? 'רק למקרה חירום אמיתי.' : '', note: true }, (a, note) => { S.savings.push({ id: uid(), ts: Date.now(), amount: sign * a, note }); save(); closeSheet(); render(); toast('נרשם'); }); break; }
     case 'invest': askAmount({ title: 'הפקדה לתיק ההשקעות', sub: 'כמה העברת לתיק?', note: true }, (a, note) => { S.invest = S.invest || []; S.invest.push({ id: uid(), ts: Date.now(), amount: a, note }); save(); closeSheet(); render(); toast('נרשם'); }); break;
-    case 'pay-debt': { const d = debt(v); askAmount({ title: `תשלום ל${d.name}`, sub: `נשארו ${stripTags(money(debtLeft(v)))}`, initial: d.monthly || '' }, a => { S.debtPays.push({ id: uid(), ts: Date.now(), debtId: v, amount: Math.min(a, debtLeft(v)) }); save(); closeSheet(); render(); toast(debtLeft(v) <= 0 ? `סגרת את החוב ל${d.name}` : 'נרשם'); }); break; }
+    case 'pay-debt': openPayDebt(v, 0); break;
     case 'del-move': {
       const k = b.dataset.k, id = b.dataset.id;
-      if (k === 'pay') { S.debtPays = S.debtPays.filter(p => p.id !== id); for (const m in S.checks) for (const c in S.checks[m]) if (S.checks[m][c].payId === id) delete S.checks[m][c]; }
+      if (k === 'pay') removeDebtPay(id);
       if (k === 'sav') S.savings = S.savings.filter(p => p.id !== id);
       if (k === 'inv') S.invest = (S.invest || []).filter(p => p.id !== id);
       if (k === 'inc') S.incomes = S.incomes.filter(p => p.id !== id);
@@ -1248,11 +1370,12 @@ document.addEventListener('click', e => {
     case 'receive': openReceive(v, b.dataset.to); break;
     case 'cash-count': cashCount(); break;
     case 'cash-withdraw': askAmount({ title: 'משכתי מזומן', sub: 'כמה הוצאת מהכספומט?' }, a => { S.cash = S.cash || []; if (!cashAnchor()) { toast('קודם לספור את הארנק פעם אחת'); cashCount(); return; } S.cash.push({ id: uid(), ts: Date.now(), kind: 'withdraw', amount: a }); save(); closeSheet(); render(); toast(`בארנק: ${stripTags(money(cashBalance()))}`); }); break;
-    case 'cash-del': { const r = (S.receipts || []).find(x => x.cashId === b.dataset.id); if (r) deleteReceipt(r.id); } S.cash = (S.cash || []).filter(c => c.id !== b.dataset.id); save(); openWallet(); render(); break;
+    case 'cash-del': { const r = (S.receipts || []).find(x => x.cashId === b.dataset.id); if (r) deleteReceipt(r.id); const p = S.debtPays.find(x => x.cashId === b.dataset.id); if (p) removeDebtPay(p.id); } S.cash = (S.cash || []).filter(c => c.id !== b.dataset.id); save(); openWallet(); render(); break;
     case 'push-on': enableNotifications(); break;
     case 'push-test': testNotification(); break;
     case 'notify-toggle': { S.settings.notify = Object.assign({ sunday: true, due: true, evening: true, budget: true, cash: true, month: true }, S.settings.notify || {}); S.settings.notify[v] = !S.settings.notify[v]; save(); render(); break; }
     case 'disconnect': S.cloud = null; S.sync = freshSync(); persist(); render(); toast('נותק מהענן'); break;
+    case 'ap-ok': unsortedApplePay().forEach(x => { seenApplePay(x); learnFrom(x); }); save(); render(); toast('מעולה. מהפעם הבאה זה לבד'); break;
     case 'tile': openAdd(); D.cat = v; D.catTouched = true; renderAdd(); break;
     case 'setup-blank': S.setup = true; save(); UI.tab = 'settings'; render(); break;
   }

@@ -2,6 +2,7 @@
 // ------------------------------------------------------------
 // בווידג'ט: מציג כמה נשאר לך השבוע. לחיצה על קטגוריה פותחת רישום מהיר.
 // כשמריצים את הסקריפט עצמו: שואל קטגוריה, סכום, ושומר.
+// מאוטומציית אפל פיי (קיצורים): מקבל סכום ושם בית עסק, ורושם לבד.
 // אל תשתף את הקובץ הזה: יש בו את המפתח הסודי שלך.
 
 const CLOUD = { url: '__URL__', anon: '__ANON__', key: '__KEY__' };
@@ -199,20 +200,51 @@ async function quickLog(d) {
   await ok.present();
 }
 
+// Apple Pay: the Shortcuts "Transaction" automation passes the amount and merchant
+// (a text with the amount on the first line and the merchant after it, or a dictionary).
+function parseAmount(v) {
+  let t = String(v == null ? '' : v).replace(/[^\d.,]/g, '');
+  if (/,\d{1,2}$/.test(t) && !t.includes('.')) t = t.replace(',', '.');
+  return parseFloat(t.replace(/,/g, ''));
+}
+async function applePay(p) {
+  let amount, merchant = '', raw = '';
+  if (p && typeof p === 'object') { raw = String(p.amount || p.Amount || ''); amount = parseAmount(raw); merchant = String(p.merchant || p.Merchant || ''); }
+  else { const lines = String(p).split(/\n/).map(x => x.trim()).filter(Boolean); raw = lines[0] || ''; amount = parseAmount(raw); merchant = lines.slice(1).join(' '); }
+  const foreign = /\$|€|£|usd|eur|gbp|thb|฿/i.test(raw);
+  const n = new Notification();
+  if (!(amount > 0)) { n.title = 'אפל פיי: לא נרשם'; n.body = `לא הצלחתי לקרוא את הסכום (${raw}). כדאי לרשום ידנית.`; await n.schedule(); Script.setShortcutOutput(n.body); return; }
+  const res = await rpc('mf_apple_pay', { p_amount: amount, p_merchant: (merchant + (foreign ? ` (${raw})` : '')).trim() });
+  fm.writeString(cachePath, JSON.stringify(res));
+  n.title = res.dup ? `כבר נרשם · ${fmt(amount)}` : `נרשם · ${fmt(amount)}${merchant ? ` · ${merchant}` : ''}`;
+  n.body = foreign ? 'הסכום במטבע זר. כדאי לתקן באפליקציה לסכום בשקלים.'
+    : res.known ? `${res.cat_name} · נשאר לך השבוע ${fmt(res.week_left)}`
+    : `מקום חדש, נכנס ל"${res.cat_name}". אפשר לתקן באפליקציה. נשאר השבוע ${fmt(res.week_left)}`;
+  await n.schedule();
+  Script.setShortcutOutput(`${n.title}\n${n.body}`);
+}
+
+const fromShortcut = !config.runsInWidget && args.shortcutParameter != null && args.shortcutParameter !== '';
 try {
-  const d = await getData();
-  if (config.runsInWidget) {
-    Script.setWidget(buildWidget(d));
-  } else if ((args.queryParameters || {}).preview) {
-    await buildWidget(d).presentMedium();
+  if (fromShortcut) {
+    await applePay(args.shortcutParameter);
   } else {
-    await quickLog(d);
+    const d = await getData();
+    if (config.runsInWidget) {
+      Script.setWidget(buildWidget(d));
+    } else if ((args.queryParameters || {}).preview) {
+      await buildWidget(d).presentMedium();
+    } else {
+      await quickLog(d);
+    }
   }
 } catch (e) {
   if (config.runsInWidget) {
     const w = new ListWidget(); w.backgroundColor = C.bg;
     const t = w.addText('אין חיבור כרגע'); t.textColor = C.muted; t.font = Font.systemFont(12);
     Script.setWidget(w);
+  } else if (fromShortcut) {
+    const n = new Notification(); n.title = 'אפל פיי: לא נרשם'; n.body = `אין חיבור כרגע. כדאי לרשום ידנית. (${String(e.message || e).slice(0, 60)})`; await n.schedule();
   } else {
     const a = new Alert(); a.title = 'משהו לא עבד'; a.message = String(e.message || e); a.addAction('סגור'); await a.present();
   }
