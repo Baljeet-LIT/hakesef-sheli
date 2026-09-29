@@ -695,81 +695,95 @@ function viewGoals() {
 }
 
 /* ----- settings ----- */
+// A short menu; each item opens its own page (UI.setSec).
+const SET_SECS = {
+  income: 'הכנסה וכסף כיס', bills: 'תשלומים קבועים', cashIncome: 'מזומן שמגיע כל חודש', debts: 'חובות', priority: 'לאן הולך כסף נוסף', categories: 'קטגוריות',
+  notify: 'התראות', widget: "ווידג'ט במסך הבית", applepay: 'רישום אוטומטי מאפל פיי', connect: "חיבור לענן ולווידג'ט",
+  cloud: 'ענן וסנכרון', backup: 'גיבוי ושחזור', update: 'קוד עדכון',
+};
 function viewSettings() {
-  const st = S.settings;
-  const line = (label, path, val) => `<div class="set-line"><span>${label}</span><input inputmode="decimal" data-set="${path}" value="${val}"></div>`;
-  let out = `<div class="top"><h1>הגדרות</h1><button class="btn ghost sm" data-act="tab" data-v="today">סיום</button></div>`;
-  out += `<div class="card"><h3>המספרים הגדולים</h3>
-    ${line('הכנסה חודשית בטוחה (נטו)', 'income', st.income)}
-    ${st.envelopes.map((e, i) => line(`${e.name} ${e.type === 'weekly' ? '(בשבוע)' : e.type === 'monthly' ? '(בחודש)' : '(קופה)'}`, `envelopes.${i}.amount`, e.amount)).join('')}
-    ${line('קרדיט וולט (בחודש)', 'woltCredit', st.woltCredit || 0)}
-    ${line('יעד קופת חירום', 'emergencyGoal', st.emergencyGoal)}
-    </div>`;
-
-  out += `<div class="card"><h3>תשלומים קבועים מחשבון הבית</h3><div class="form-row h"><span>שם</span><span>סכום</span><span>יום</span><span></span></div>
-    ${st.bills.map((b, i) => `<div class="form-row"><input data-set="bills.${i}.name" value="${esc(b.name)}"><input inputmode="decimal" data-set="bills.${i}.amount" value="${b.amount}"><input inputmode="numeric" data-set="bills.${i}.day" value="${b.day || ''}"><button class="x" data-act="del-row" data-v="bills.${i}">×</button></div>`).join('')}
-    <button class="btn ghost sm" data-act="add-row" data-v="bills">הוספת תשלום</button></div>`;
-
-  out += `<div class="card"><h3>כסף שמגיע במזומן כל חודש</h3><div class="form-row h"><span>שם</span><span>סכום</span><span>יום</span><span></span></div>
-    ${(st.cashIncome || []).map((b, i) => `<div class="form-row"><input data-set="cashIncome.${i}.name" value="${esc(b.name)}"><input inputmode="decimal" data-set="cashIncome.${i}.amount" value="${b.amount}"><input inputmode="numeric" data-set="cashIncome.${i}.day" value="${b.day || ''}"><button class="x" data-act="del-row" data-v="cashIncome.${i}">×</button></div>`).join('')}
-    <button class="btn ghost sm" data-act="add-row" data-v="cashIncome">הוספה</button><p class="muted small">חלק מההכנסה. נכנס לארנק כשמסמנים שהגיע.</p></div>`;
-
-  out += `<div class="card"><h3>חובות</h3><div class="form-row h" style="grid-template-columns:1fr 80px 70px 50px 36px"><span>שם</span><span>סה"כ</span><span>בחודש</span><span>יום</span><span></span></div>
-    ${st.debts.map((d, i) => `<div class="form-row" style="grid-template-columns:1fr 80px 70px 50px 36px"><input data-set="debts.${i}.name" value="${esc(d.name)}"><input inputmode="decimal" data-set="debts.${i}.total" value="${d.total}"><input inputmode="decimal" data-set="debts.${i}.monthly" value="${d.monthly || 0}"><input inputmode="numeric" data-set="debts.${i}.day" value="${d.day || ''}"><button class="x" data-act="del-row" data-v="debts.${i}">×</button></div>`).join('')}
-    <button class="btn ghost sm" data-act="add-row" data-v="debts">הוספת חוב</button>
-    <p class="muted small">"סה"כ" הוא הסכום בזמן ההגדרה. תשלומים שנרשמים באפליקציה יורדים ממנו לבד.</p></div>`;
-
-  const names = { emergency: 'קופת חירום' };
-  st.debts.forEach(d => names[d.id] = d.name);
-  const pri = [...st.priority.filter(p => names[p]), ...st.debts.map(d => d.id).filter(id => !st.priority.includes(id))].filter(p => !debt(p)?.noExtra);
-  out += `<div class="card"><h3>הסדר שבו הולך כסף נוסף</h3>${pri.map((p, i) => `<div class="set-line"><span>${i + 1}. ${esc(names[p])}</span><span><button class="btn ghost sm" data-act="pri" data-v="${p}" data-d="-1" ${i === 0 ? 'disabled style="opacity:.3"' : ''}>למעלה</button></span></div>`).join('')}</div>`;
-
-  out += `<div class="card"><h3>קטגוריות</h3><div class="form-row h" style="grid-template-columns:1fr 90px 1fr 36px"><span>שם</span><span>יעד חודשי</span><span>יורד מ-</span><span></span></div>
-    ${st.categories.map((c, i) => `<div class="form-row" style="grid-template-columns:1fr 90px 1fr 36px"><input data-set="categories.${i}.name" value="${esc(c.name)}"><input inputmode="decimal" data-set="categories.${i}.budget" value="${c.budget || 0}"><select class="field" style="padding:8px" data-set="categories.${i}.env">${[...st.envelopes.map(e => [e.id, e.name]), ['none', 'חשבון הבית'], ['savings', 'הקופה בצד'], ['reimb', 'אף אחד (יחזירו לי)']].map(([v, n]) => `<option value="${v}" ${c.env === v ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select><button class="x" data-act="del-row" data-v="categories.${i}">×</button></div>`).join('')}
-    <button class="btn ghost sm" data-act="add-row" data-v="categories">הוספת קטגוריה</button></div>`;
-
+  const sec = UI.setSec && SET_SECS[UI.setSec] ? UI.setSec : null;
+  if (sec) return `<div class="top"><button class="btn ghost sm" data-act="set-sec" data-v="">${I.chevR} הגדרות</button></div><h1 class="sec-title">${SET_SECS[sec]}</h1>` + settingsSection(sec);
+  const st = S.settings, sy = S.sync;
+  const rowS = (id, sub) => `<button class="set-row" data-act="set-sec" data-v="${id}"><span class="main"><span class="n">${SET_SECS[id]}</span>${sub ? `<span class="s">${sub}</span>` : ''}</span>${I.chevL}</button>`;
+  const pocket = env('pocket'), names = { emergency: 'קופת חירום' }; st.debts.forEach(d => names[d.id] = d.name);
+  const firstExtra = extraOrder().find(p => p === 'emergency' || debtLeft(p) > 0);
   const bf = baseFree(), dm = sum(st.debts.filter(d => debtLeft(d.id) > 0), d => monthlyDue(d, monthStart()));
+  const pushOn = S.pushOn && notifyState() === 'granted';
+  const backupOld = Date.now() - (S.lastBackup || 0) > 14 * DAY;
+  let out = `<div class="top"><h1>הגדרות</h1><button class="btn ghost sm" data-act="tab" data-v="today">סיום</button></div>`;
   out += `<div class="card"><h3>החשבון החודשי</h3>
-    <div class="row"><span>הכנסה</span>${money(st.income)}</div><div class="row"><span>תשלומים קבועים</span>${money(-billsMonthly())}</div><div class="row"><span>כסף הכיס (ממוצע חודשי)</span>${money(-pocketMonthly())}</div><div class="row"><span>חובות קבועים</span>${money(-dm)}</div>
-    <div class="row" style="font-weight:800;margin-top:6px"><span>נשאר לחובות ולחיסכון</span>${money(bf - dm)}</div></div>`;
-
-  if (S.cloud) {
-    const sy = S.sync;
-    out += `<div class="card"><h3>ענן</h3><p class="small" style="margin-top:0">${sy.lastErr ? `<span style="color:var(--bad)">הסנכרון האחרון נכשל: ${esc(sy.lastErr)}</span>` : sy.lastOk ? `מסונכרן · ${dayLabel(sy.lastOk)} ${timeLabel(sy.lastOk)}` : 'עוד לא סונכרן'}${Object.keys(sy.dirty).length ? ` · ${Object.keys(sy.dirty).length} מחכות לעלות` : ''}</p>
-      <div class="row"><button class="btn ghost sm" data-act="sync-now">סנכרון עכשיו</button><button class="btn danger sm" data-act="disconnect">ניתוק</button></div></div>
-      ${viewNotifySettings()}
-      <div class="card"><h3>ווידג'ט במסך הבית</h3>
-      <ol class="small" style="padding-inline-start:18px;margin:0 0 12px;line-height:1.7">
-        <li>להוריד מה-App Store את האפליקציה החינמית <b>Scriptable</b>.</li>
-        <li>ללחוץ כאן על "העתקת קוד לווידג'ט".</li>
-        <li>לפתוח את Scriptable, ללחוץ על הפלוס למעלה, להדביק, ולקרוא לסקריפט <b>הכסף שלי</b> (לחיצה על השם למעלה).</li>
-        <li>במסך הבית: לחיצה ארוכה, הוספת ווידג'ט, Scriptable, לבחור גודל בינוני. אחר כך לחיצה ארוכה על הווידג'ט, "עריכת ווידג'ט", ובשדה Script לבחור "הכסף שלי".</li>
-        <li>בונוס: בהגדרות האייפון, כפתור הפעולה (Action Button), לבחור קיצור דרך שמריץ את הסקריפט "הכסף שלי". ככה לחיצה על הכפתור בצד פותחת רישום הוצאה.</li>
-      </ol>
-      <button class="btn block" data-act="copy-script">העתקת קוד לווידג'ט</button>
-      <p class="muted small">בקוד יש מפתח סודי. לא לשלוח אותו לאף אחד.</p></div>
-      <div class="card"><h3>רישום אוטומטי מאפל פיי</h3>
-      <p class="small" style="margin-top:0">כל תשלום באייפון או בשעון נרשם לבד, ומגיעה התראה קטנה עם כמה נשאר לשבוע. צריך את הווידג'ט מלמעלה מותקן.</p>
-      <ol class="small" style="padding-inline-start:18px;margin:0 0 12px;line-height:1.7">
-        <li>אם הווידג'ט הותקן לפני היום: ללחוץ שוב על "העתקת קוד לווידג'ט", ובתוך Scriptable למחוק את הקוד הישן ולהדביק את החדש.</li>
-        <li>לפתוח את אפליקציית <b>קיצורים</b>, לשונית <b>אוטומציה</b>, פלוס, ולבחור <b>עסקה</b> (Transaction).</li>
-        <li>לסמן רק את הכרטיסים שלך, ולבחור <b>הפעלה מיידית</b>. הבא.</li>
-        <li>אוטומציה ריקה חדשה. להוסיף פעולה <b>טקסט</b>. בתוכה: המשתנה <b>סכום</b> (Amount), ירידת שורה, והמשתנה <b>סוחר</b> (Merchant).</li>
-        <li>להוסיף פעולה של Scriptable בשם <b>Run Script</b>. לבחור את "הכסף שלי", ובשדה Parameter לבחור את הטקסט מהשלב הקודם. לכבות את Run In App.</li>
-        <li>לשלם פעם אחת באפל פיי ולבדוק שמגיעה התראה.</li>
-      </ol>
-      <p class="muted small">מקום שהאפליקציה מכירה נכנס לבד לקטגוריה הנכונה. מקום חדש מופיע במסך "היום" כדי לבחור לו קטגוריה, פעם אחת. תשלום באפל פיי לא צריך לרשום ידנית.</p></div>`;
-  } else {
-    out += `<div class="card"><h3>חיבור לענן ולווידג'ט</h3><p class="muted small" style="margin-top:0">הדבק את קוד החיבור שקיבלת. הנתונים שבאייפון יעלו לענן, ואז אפשר להוסיף ווידג'ט ולרשום הוצאות גם בלי לפתוח את האפליקציה.</p>
-      <textarea class="field" id="cloud-code" placeholder="קוד חיבור"></textarea><div class="sp"></div><button class="btn block" data-act="cloud-code">התחברות</button></div>`;
-  }
-  out += `<div class="card"><h3>גיבוי</h3><p class="muted small" style="margin-top:0">הנתונים שמורים רק באייפון. כדאי לגבות פעם בשבועיים (לשלוח לעצמך בוואטסאפ או לשמור בקבצים).</p>
-    <div class="row"><button class="btn sm" data-act="backup">גיבוי עכשיו</button><button class="btn ghost sm" data-act="restore">שחזור מגיבוי</button></div>
-    ${S.lastBackup ? `<p class="muted small">גיבוי אחרון: ${dayLabel(S.lastBackup)}</p>` : ''}</div>
-    <div class="card"><h3>קוד עדכון</h3><p class="muted small" style="margin-top:0">כשהתוכנית משתנה, תקבל קוד. מדביקים כאן, והמספרים מתעדכנים. ההוצאות לא נמחקות.</p>
-      <textarea class="field" id="update-code" placeholder="קוד עדכון"></textarea><div class="sp"></div><button class="btn block" data-act="update-code">עדכון התוכנית</button></div>
-    <div class="card"><h3>איפוס</h3><button class="btn danger sm" data-act="reset">מחיקת כל הנתונים</button></div>`;
+    <div class="row"><span>משכורת</span>${money(st.income)}</div><div class="row"><span>תשלומים קבועים</span>${money(-billsMonthly())}</div><div class="row"><span>כסף הכיס</span>${money(-pocketMonthly())}</div><div class="row"><span>חובות קבועים</span>${money(-dm)}</div>
+    <div class="row" style="font-weight:800;margin-top:6px;padding-top:6px;border-top:1px solid var(--line)"><span>נשאר לקופה ולחובות</span>${money(bf - dm)}</div></div>`;
+  out += `<div class="set-group">התוכנית</div><div class="card list-card">
+    ${rowS('income', `${stripTags(money(st.income))} בחודש${pocket ? ` · ${stripTags(money(pocket.amount))} לשבוע` : ''}`)}
+    ${rowS('bills', st.bills.length ? `${st.bills.length} תשלומים · ${stripTags(money(billsMonthly()))} בחודש` : 'אין')}
+    ${rowS('cashIncome', (st.cashIncome || []).length ? `${stripTags(money(sum(st.cashIncome, c => c.amount)))} בחודש` : 'אין')}
+    ${rowS('debts', st.debts.length ? `${st.debts.length} חובות · נשארו ${stripTags(money(totalDebtLeft()))}` : 'אין')}
+    ${rowS('priority', firstExtra ? `עכשיו: ${esc(names[firstExtra])}` : 'תיק ההשקעות')}
+    ${rowS('categories', S.settings.categories.map(c => esc(c.name)).slice(0, 4).join(', ') + (S.settings.categories.length > 4 ? '…' : ''))}</div>`;
+  out += `<div class="set-group">באייפון</div><div class="card list-card">${S.cloud
+    ? rowS('notify', pushOn ? 'פועלות' : 'כבויות') + rowS('widget', 'דרך Scriptable') + rowS('applepay', 'כל תשלום נרשם לבד')
+    : rowS('connect', 'צריך קוד חיבור')}</div>`;
+  out += `<div class="set-group">הנתונים</div><div class="card list-card">
+    ${S.cloud ? rowS('cloud', sy.lastErr ? '<span style="color:var(--bad)">הסנכרון נכשל</span>' : sy.lastOk ? `מסונכרן · ${dayLabel(sy.lastOk)}` : 'עוד לא סונכרן') : ''}
+    ${rowS('backup', S.lastBackup ? `${backupOld ? '<span style="color:var(--warn)">' : '<span>'}גיבוי אחרון: ${dayLabel(S.lastBackup)}</span>` : 'עוד לא גובה')}
+    ${rowS('update', 'כשהתוכנית משתנה')}</div>`;
+  out += `<button class="btn danger sm" style="margin:8px auto 0;display:flex" data-act="reset">מחיקת כל הנתונים</button>`;
   return out;
+}
+
+/* One editable item: a name on top, labeled numbers below. */
+function editBlock(arr, i, name, fields, note = '') {
+  return `<div class="edit-block"><div class="eb-top"><input data-set="${arr}.${i}.name" value="${esc(name)}" placeholder="שם"><button class="x" data-act="del-row" data-v="${arr}.${i}" aria-label="מחיקה">×</button></div>
+    <div class="eb-grid">${fields.map(([label, path, val, mode]) => `<label><span>${label}</span>${mode === 'select' ? val : `<input inputmode="${mode || 'decimal'}" data-set="${arr}.${i}.${path}" value="${val}">`}</label>`).join('')}</div>${note ? `<div class="s">${note}</div>` : ''}</div>`;
+}
+function settingsSection(sec) {
+  const st = S.settings;
+  const line = (label, path, val, help = '') => `<div class="set-line"><span>${label}${help ? `<small>${help}</small>` : ''}</span><input inputmode="decimal" data-set="${path}" value="${val}"></div>`;
+  const note = t => `<p class="muted small" style="margin:10px 2px">${t}</p>`;
+  const steps = arr => `<ol class="small steps">${arr.map(x => `<li>${x}</li>`).join('')}</ol>`;
+  switch (sec) {
+    case 'income': return `<div class="card">
+      ${line('משכורת בחודש', 'income', st.income, 'נטו, בלי עמלות')}
+      ${st.envelopes.map((e, i) => line(e.type === 'weekly' ? `${e.name} לשבוע` : e.type === 'monthly' ? `${e.name} לחודש` : e.name, `envelopes.${i}.amount`, e.amount, e.id === 'pocket' ? 'מתחדש כל יום ראשון' : '')).join('')}
+      ${line('קרדיט וולט בחודש', 'woltCredit', st.woltCredit || 0, 'מהעבודה')}
+      ${line('יעד קופת חירום', 'emergencyGoal', st.emergencyGoal, 'אחריו הכסף הולך להשקעות')}</div>
+      ${note('שינוי לשבוע אחד בלבד (חג, אירוע) עושים בלחיצה על הכרטיס הסגול במסך "היום".')}`;
+    case 'bills': return `<div class="card">${st.bills.map((b, i) => editBlock('bills', i, b.name, [['סכום', 'amount', b.amount], ['יום בחודש', 'day', b.day || '', 'numeric']])).join('') || '<div class="empty">אין תשלומים קבועים</div>'}
+      <button class="btn ghost sm" data-act="add-row" data-v="bills">הוספת תשלום</button></div>${note('מה שיוצא מחשבון הבית כל חודש: דירה, חשבונות, מנויים.')}`;
+    case 'cashIncome': return `<div class="card">${(st.cashIncome || []).map((b, i) => editBlock('cashIncome', i, b.name, [['סכום', 'amount', b.amount], ['יום בחודש', 'day', b.day || '', 'numeric']])).join('') || '<div class="empty">אין</div>'}
+      <button class="btn ghost sm" data-act="add-row" data-v="cashIncome">הוספה</button></div>${note('חלק מההכנסה שמגיע במזומן. כשמסמנים שהגיע, הוא נכנס לארנק.')}`;
+    case 'debts': return `<div class="card">${st.debts.map((d, i) => editBlock('debts', i, d.name, [['סכום התחלתי', 'total', d.total], ['בחודש', 'monthly', d.monthly || 0], ['יום', 'day', d.day || '', 'numeric']], debtLeft(d.id) > 0 ? `נשאר עכשיו ${stripTags(money(debtLeft(d.id)))}${d.noExtra ? ' · תשלום קבוע, בלי תוספות' : ''}` : 'סגור')).join('') || '<div class="empty">אין חובות</div>'}
+      <button class="btn ghost sm" data-act="add-row" data-v="debts">הוספת חוב</button></div>${note('"סכום התחלתי" הוא החוב ביום שהגדרת אותו. כל תשלום שנרשם יורד ממנו לבד, אז לא צריך לעדכן אותו.')}`;
+    case 'priority': {
+      const names = { emergency: 'קופת חירום' }; st.debts.forEach(d => names[d.id] = d.name);
+      const pri = [...st.priority.filter(p => names[p]), ...st.debts.map(d => d.id).filter(id => !st.priority.includes(id))].filter(p => !debt(p)?.noExtra);
+      return `<div class="card">${pri.map((p, i) => `<div class="set-line"><span>${i + 1}. ${esc(names[p])}${p !== 'emergency' && debtLeft(p) <= 0 ? '<small>סגור</small>' : ''}</span><button class="btn ghost sm" data-act="pri" data-v="${p}" ${i === 0 ? 'disabled style="opacity:.3"' : ''}>למעלה</button></div>`).join('')}
+        <div class="set-line"><span>${pri.length + 1}. תיק ההשקעות<small>כשכל השאר מלא</small></span></div></div>${note('כסף שנשאר בסוף החודש, בונוסים ועמלות הולכים לפי הסדר הזה. חובות עם תשלום קבוע בלי ריבית לא מופיעים כאן.')}`;
+    }
+    case 'categories': {
+      const opts = c => `<select class="field" data-set="categories.${S.settings.categories.indexOf(c)}.env">${[...st.envelopes.map(e => [e.id, e.name]), ['none', 'חשבון הבית'], ['savings', 'הקופה בצד'], ['reimb', 'אף אחד (יחזירו לי)']].map(([v, n]) => `<option value="${v}" ${c.env === v ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>`;
+      return `<div class="card">${st.categories.map((c, i) => editBlock('categories', i, c.name, [['יעד בחודש', 'budget', c.budget || 0], ['יורד מ', '', opts(c), 'select']])).join('')}
+        <button class="btn ghost sm" data-act="add-row" data-v="categories">הוספת קטגוריה</button></div>${note('היעד עוזר לראות לאן הולך הכסף. הוא לא משנה את הסכום השבועי.')}`;
+    }
+    case 'notify': return viewNotifySettings();
+    case 'widget': return `<div class="card">${steps(['להוריד מה-App Store את האפליקציה החינמית <b>Scriptable</b>.', 'ללחוץ כאן למטה על "העתקת הקוד".', 'לפתוח את Scriptable, פלוס למעלה, להדביק, ולקרוא לסקריפט <b>הכסף שלי</b>.', 'במסך הבית: לחיצה ארוכה, הוספת ווידג\'ט, Scriptable, גודל בינוני. לחיצה ארוכה על הווידג\'ט, "עריכת ווידג\'ט", ובשדה Script לבחור "הכסף שלי".', 'בונוס: בהגדרות האייפון, כפתור הפעולה, קיצור דרך שמריץ את "הכסף שלי". ככה הכפתור בצד פותח רישום הוצאה.'])}
+      <button class="btn block" data-act="copy-script">העתקת הקוד</button></div>${note('בקוד יש מפתח סודי. לא לשלוח אותו לאף אחד.')}`;
+    case 'applepay': return `<div class="card"><p class="small" style="margin-top:0">כל תשלום באייפון או בשעון נרשם לבד, ומגיעה התראה עם כמה נשאר לשבוע. צריך שהווידג'ט יהיה מותקן.</p>
+      ${steps(['אם הווידג\'ט הותקן לפני 30.9: בדף "ווידג\'ט במסך הבית" להעתיק שוב את הקוד, ובתוך Scriptable להחליף את הישן בחדש.', 'אפליקציית <b>קיצורים</b>, לשונית <b>אוטומציה</b>, פלוס, <b>עסקה</b> (Transaction).', 'לסמן רק את הכרטיסים שלך ולבחור <b>הפעלה מיידית</b>.', 'אוטומציה ריקה. פעולה <b>טקסט</b>, ובתוכה המשתנה <b>סכום</b>, ירידת שורה, והמשתנה <b>סוחר</b>.', 'פעולה של Scriptable בשם <b>Run Script</b>: לבחור "הכסף שלי", ב-Parameter לבחור את הטקסט, ולכבות את Run In App.', 'לשלם פעם אחת ולבדוק שמגיעה התראה.'])}</div>
+      ${note('מקום שהאפליקציה מכירה נכנס לבד לקטגוריה הנכונה. מקום חדש מופיע במסך "היום" כדי לבחור לו קטגוריה, פעם אחת. תשלום באפל פיי לא צריך לרשום ידנית.')}`;
+    case 'connect': return `<div class="card"><p class="muted small" style="margin-top:0">הדבק את קוד החיבור שקיבלת. אחרי זה אפשר ווידג'ט, התראות ורישום מאפל פיי.</p>
+      <textarea class="field" id="cloud-code" placeholder="קוד חיבור"></textarea><div class="sp"></div><button class="btn block" data-act="cloud-code">התחברות</button></div>`;
+    case 'cloud': { const sy = S.sync; return `<div class="card"><p style="margin-top:0">${sy.lastErr ? `<span style="color:var(--bad)">הסנכרון האחרון נכשל: ${esc(sy.lastErr)}</span>` : sy.lastOk ? `מסונכרן · ${dayLabel(sy.lastOk)} ${timeLabel(sy.lastOk)}` : 'עוד לא סונכרן'}${Object.keys(sy.dirty).length ? ` · ${Object.keys(sy.dirty).length} מחכות לעלות` : ''}</p>
+      <button class="btn block" data-act="sync-now">סנכרון עכשיו</button></div>${note('הסנכרון קורה לבד. צריך את הכפתור רק אם משהו נראה לא מעודכן.')}
+      <button class="btn danger sm" data-act="disconnect">ניתוק מהענן</button>`; }
+    case 'backup': return `<div class="card"><p class="muted small" style="margin-top:0">כדאי לגבות פעם בשבועיים: לשלוח לעצמך בוואטסאפ או לשמור בקבצים.${S.lastBackup ? ` גיבוי אחרון: ${dayLabel(S.lastBackup)}.` : ''}</p>
+      <button class="btn block" data-act="backup">גיבוי עכשיו</button><div class="sp"></div><button class="btn ghost block" data-act="restore">שחזור מגיבוי</button></div>`;
+    case 'update': return `<div class="card"><p class="muted small" style="margin-top:0">כשהתוכנית משתנה מקבלים קוד. מדביקים כאן והמספרים מתעדכנים. ההוצאות לא נמחקות.</p>
+      <textarea class="field" id="update-code" placeholder="קוד עדכון"></textarea><div class="sp"></div><button class="btn block" data-act="update-code">עדכון התוכנית</button></div>`;
+  }
+  return '';
 }
 
 /* ---------------- sheets ---------------- */
@@ -1272,7 +1286,7 @@ document.addEventListener('click', e => {
   const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
   const act = b.dataset.act, v = b.dataset.v;
   switch (act) {
-    case 'tab': UI.tab = v; if (v === 'month') UI.monthOffset = 0; render(); window.scrollTo(0, 0); break;
+    case 'tab': UI.tab = v; if (v === 'settings') UI.setSec = null; if (v === 'month') UI.monthOffset = 0; render(); window.scrollTo(0, 0); break;
     case 'add': openAdd(); break;
     case 'close': closeSheet(); break;
     case 'edit': { const x = S.expenses.find(x => x.id === b.dataset.id); if (x) openAdd(x); break; }
@@ -1299,7 +1313,8 @@ document.addEventListener('click', e => {
     case 'events': openEvents(); break;
     case 'ev-expense': openExpenseEvent(); break;
     case 'ev-change': openChangeEvent(); break;
-    case 'go-set': closeSheet(); UI.tab = 'settings'; render(); { const h = { nums: 0, bills: 1, debts: 2 }[v]; const cards = document.querySelectorAll('#app .card'); if (cards[h]) cards[h].scrollIntoView({ behavior: 'smooth', block: 'start' }); } break;
+    case 'go-set': closeSheet(); UI.tab = 'settings'; UI.setSec = { nums: 'income', bills: 'bills', debts: 'debts' }[v] || null; render(); window.scrollTo(0, 0); break;
+    case 'set-sec': UI.setSec = v || null; render(); window.scrollTo(0, 0); break;
     case 'set-weekly': { const e = env('pocket'); e.amount = +v; save(); render(); toast('עודכן. התאריכים במסך המטרות התעדכנו'); break; }
     case 'set-budget': { const c = cat(v); c.budget = +b.dataset.d; save(); render(); toast('היעד עודכן'); break; }
     case 'saving': { const sign = parseInt(v, 10); askAmount({ title: sign > 0 ? 'הפקדה לקופה' : 'משיכה מהקופה', sub: sign < 0 ? 'רק למקרה חירום אמיתי.' : '', note: true }, (a, note) => { S.savings.push({ id: uid(), ts: Date.now(), amount: sign * a, note }); save(); closeSheet(); render(); toast('נרשם'); }); break; }
@@ -1325,7 +1340,7 @@ document.addEventListener('click', e => {
       if (v === 'categories') arr.push({ id: uid(), name: '', env: 'pocket', budget: 0, color: ['#c2703d', '#6f9169', '#8a5bb0', '#4f7ca8', '#c24f6b', '#1fa0c9'][arr.length % 6] });
       save(); render(); break;
     }
-    case 'del-row': { const [k, i] = v.split('.'); S.settings[k].splice(+i, 1); save(); render(); break; }
+    case 'del-row': { const [k, i] = v.split('.'), it = S.settings[k][+i]; if ((k === 'debts' || k === 'categories') && it.name && !confirm(`למחוק את "${it.name}"?`)) break; S.settings[k].splice(+i, 1); save(); render(); break; }
     case 'pri': {
       const st = S.settings, names = ['emergency', ...st.debts.map(d => d.id)];
       const pri = [...st.priority.filter(p => names.includes(p)), ...st.debts.map(d => d.id).filter(id => !st.priority.includes(id))];
@@ -1346,7 +1361,7 @@ document.addEventListener('click', e => {
       let o; try { o = decodeSetup(document.getElementById('cloud-code').value); } catch (err) { toast('הקוד לא תקין'); break; }
       if (!o.cloud) { toast('בקוד הזה אין פרטי ענן'); break; }
       toast('מתחבר…');
-      connectCloud(o.cloud).then(() => { render(); toast(S.sync.lastErr ? 'החיבור נכשל: ' + S.sync.lastErr : 'מחובר. הנתונים עלו לענן'); }).catch(e => { S.cloud = null; persist(); render(); toast('החיבור נכשל'); });
+      connectCloud(o.cloud).then(() => { UI.setSec = null; render(); toast(S.sync.lastErr ? 'החיבור נכשל: ' + S.sync.lastErr : 'מחובר. הנתונים עלו לענן'); }).catch(e => { S.cloud = null; persist(); render(); toast('החיבור נכשל'); });
       break;
     }
     case 'sync-now': sync().then(() => { render(); toast(S.sync.lastErr ? 'לא הצליח: ' + S.sync.lastErr : 'מסונכרן'); }); break;
@@ -1374,7 +1389,7 @@ document.addEventListener('click', e => {
     case 'push-on': enableNotifications(); break;
     case 'push-test': testNotification(); break;
     case 'notify-toggle': { S.settings.notify = Object.assign({ sunday: true, due: true, evening: true, budget: true, cash: true, month: true }, S.settings.notify || {}); S.settings.notify[v] = !S.settings.notify[v]; save(); render(); break; }
-    case 'disconnect': S.cloud = null; S.sync = freshSync(); persist(); render(); toast('נותק מהענן'); break;
+    case 'disconnect': UI.setSec = null; S.cloud = null; S.sync = freshSync(); persist(); render(); toast('נותק מהענן'); break;
     case 'ap-ok': unsortedApplePay().forEach(x => { seenApplePay(x); learnFrom(x); }); save(); render(); toast('מעולה. מהפעם הבאה זה לבד'); break;
     case 'tile': openAdd(); D.cat = v; D.catTouched = true; renderAdd(); break;
     case 'setup-blank': S.setup = true; save(); UI.tab = 'settings'; render(); break;
