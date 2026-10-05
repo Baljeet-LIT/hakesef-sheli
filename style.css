@@ -191,7 +191,7 @@ textarea.field{min-height:90px;font-size:13px;direction:ltr}
 .steps{padding-inline-start:18px;margin:0 0 12px;line-height:1.7}
 
 /* accounts */
-.accts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 6px}
+.accts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 6px}
 .acct{display:flex;flex-direction:column;align-items:flex-start;gap:2px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px 14px;box-shadow:var(--shadow);text-align:start}
 .acct span{font-size:13px;color:var(--muted);font-weight:600}
 .acct b{font-size:19px}
@@ -221,3 +221,5 @@ button.catbar{display:block;width:100%;text-align:start}
 .seg.when input{position:absolute;inset:0;width:100%;height:100%;opacity:0;font-size:16px;-webkit-appearance:none;appearance:none;border:0}
 .sched{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:8px;padding:5px 0;align-items:center}
 .sched>:nth-child(n+2){text-align:end}
+.card.slim-row{display:flex;justify-content:space-between;align-items:center;width:100%;font-weight:600}
+.card.slim-row b{font-size:18px}

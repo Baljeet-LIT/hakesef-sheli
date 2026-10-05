@@ -269,7 +269,7 @@ async function sync() {
     if (syncAgain || S.sync.docDirty && S.sync.lastErr === '') { syncAgain = false; scheduleSync(400); }
   }
 }
-/* Inbox item payload: { moves: [...], settings: {...}, debts: {id: patch} }. Each item is applied once. */
+/* Inbox item payload: { moves: [...], settings: {...}, debts: {id: patch}, expenses: {id: patch} }. Each item is applied once. */
 function applyInbox(items) {
   const fresh = items.filter(it => !S.inboxDone[it.id]);
   if (!fresh.length) return false;
@@ -278,6 +278,7 @@ function applyInbox(items) {
     for (const m of p.moves || []) if (!S.moves.some(x => x.id === m.id)) S.moves.push(m);
     Object.assign(S.settings, p.settings || {});
     for (const [id, patch] of Object.entries(p.debts || {})) { const d = debt(id); if (d) Object.assign(d, patch); }
+    for (const [id, patch] of Object.entries(p.expenses || {})) { const x = S.expenses.find(e => e.id === id); if (x) { Object.assign(x, patch, { m: Date.now() }); markExp(x.id); } }
     S.inboxDone[it.id] = Date.now();
   }
   rpc('mf_inbox_ack', { p_ids: fresh.map(it => it.id) }).catch(() => {});
@@ -392,11 +393,11 @@ function viewToday() {
   return out;
 }
 
-/* The three wallets. Tap one to see what went in and out, or to count it. */
+/* Bank and cash. Tap one to see what went in and out, or to count it. (Wolt matters less: it lives in the expense sheet and settings.) */
 function walletsCard() {
   const t = w => { const b = balance(w.id); return `<button class="acct" data-act="acct" data-v="${w.id}"><span>${w.name}</span><b>${b == null ? 'לספור' : money(b)}</b></button>`; };
   const sv = S.settings.savings.length ? `<button class="acct-sub" data-act="tab" data-v="goals">בחסכונות ${money(savingsTotal())}</button>` : '';
-  return `<div class="accts">${WALLETS.map(t).join('')}</div>${sv}`;
+  return `<div class="accts">${WALLETS.filter(w => w.id !== 'wolt').map(t).join('')}</div>${sv}`;
 }
 
 /* This month's spending, by category. Tap a category to log an expense in it. */
@@ -546,7 +547,8 @@ function settingsSection(sec) {
   switch (sec) {
     case 'categories': return `<div class="card">${st.categories.map((c, i) => editBlock('categories', i, c.name, [])).join('')}
       <button class="btn ghost sm" data-act="add-row" data-v="categories">הוספת קטגוריה</button></div>${note('אפשר לשנות שם בכל רגע. קטגוריה שיש בה הוצאות אי אפשר למחוק.')}`;
-    case 'wolt': return `<div class="card">
+    case 'wolt': return `<button class="card slim-row" data-act="acct" data-v="wolt"><span>יש עכשיו בוולט</span><b>${balance('wolt') == null ? 'לעדכן' : money(balance('wolt'))}</b></button>
+      <div class="card">
       <div class="set-line"><span>כמה נכנס כל חודש<small>נכנס לבד לארנק וולט ב-1 לחודש</small></span><input inputmode="decimal" id="wolt-credit" value="${st.woltCredit || 0}"></div>
       <button class="check ${st.woltReset ? 'done' : ''}" data-act="wolt-reset"><span class="box">${st.woltReset ? I.check : ''}</span><span class="main"><div class="n" style="text-decoration:none;color:var(--ink)">מה שלא נוצל נמחק בסוף החודש</div><div class="s">אם הקרדיט לא עובר לחודש הבא</div></span></button></div>
       ${note('שינוי בסכום חל מהחודש הבא. אם גם החודש נכנס סכום אחר, מעדכנים את היתרה בארנק וולט.')}`;
