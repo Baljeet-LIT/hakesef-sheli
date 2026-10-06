@@ -197,7 +197,6 @@ textarea.field{min-height:90px;font-size:13px;direction:ltr}
 .acct b{font-size:19px}
 .acct:active{transform:scale(.98)}
 .acct b{font-size:17px;white-space:nowrap}
-.acct-sub{display:block;margin:0 4px 12px;font-size:13px;color:var(--muted);font-weight:600}
 
 /* small things */
 .big-field{font-size:26px;text-align:center;font-weight:800}
@@ -223,3 +222,14 @@ button.catbar{display:block;width:100%;text-align:start}
 .sched>:nth-child(n+2){text-align:end}
 .card.slim-row{display:flex;justify-content:space-between;align-items:center;width:100%;font-weight:600}
 .card.slim-row b{font-size:18px}
+.kpi{margin-bottom:8px;padding:16px 18px}
+.kpi .amount{font-size:40px}
+.kpi .meta{color:inherit;padding:0;font-size:13.5px}
+.seg.period{width:120px;flex:none}
+.seg.period button{padding:5px 6px;font-size:13px}
+.due-row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-inline-start:4px solid var(--warn);border-radius:16px;padding:11px 14px;margin:0 0 10px;box-shadow:var(--shadow)}
+.due-row.late{border-inline-start-color:var(--bad)}
+.due-row .main{flex:1;min-width:0}
+.due-row .n{font-weight:700}
+.due-row .s{font-size:13px;color:var(--muted)}
+.due-row.late .s{color:var(--bad)}

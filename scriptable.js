@@ -1,6 +1,6 @@
 // הכסף שלי — ווידג'ט ורישום מהיר (Scriptable)
 // ------------------------------------------------------------
-// בווידג'ט: כמה הוצאת החודש וכמה יש בכל ארנק. לחיצה על קטגוריה פותחת רישום מהיר.
+// בווידג'ט: כמה הוצאת השבוע וכמה יש בכל ארנק. לחיצה על קטגוריה פותחת רישום מהיר.
 // כשמריצים את הסקריפט עצמו: שואל קטגוריה, סכום, ושומר.
 // מאוטומציית אפל פיי (קיצורים): מקבל סכום ושם בית עסק, ורושם לבד.
 // אל תשתף את הקובץ הזה: יש בו את המפתח הסודי שלך.
@@ -54,11 +54,11 @@ const rightText = (stack, str, font, color) => text(stack, str, font, color, 'ri
 const wallet = (d, id) => (d.wallets || []).find(w => w.id === id) || {};
 const walletLine = (d, ids) => ids.map(id => wallet(d, id)).filter(w => w.bal != null).map(w => `${w.name} ${fmt(w.bal)}`).join(' · ');
 
-// What you spent this month, and what's in the wallets.
+// What you spent this week (from Sunday), and what's in the wallets.
 function heroBlock(stack, d, align = 'right') {
-  text(stack, 'הוצאת החודש', Font.mediumSystemFont(13), C.muted, align);
+  text(stack, 'הוצאת השבוע', Font.mediumSystemFont(13), C.muted, align);
   stack.addSpacer(2);
-  text(stack, fmt(d.month_spent), Font.heavySystemFont(30), C.text, align);
+  text(stack, fmt(d.week_spent), Font.heavySystemFont(30), C.text, align);
   stack.addSpacer(6);
   if (d.today_spent > 0) text(stack, `היום ${fmt(d.today_spent)}`, Font.systemFont(11), C.muted, align);
   stack.addSpacer(4);
@@ -78,7 +78,7 @@ function tile(parent, c, size) {
   t.url = `${URLScheme.forRunningScript()}?cat=${encodeURIComponent(c.id)}`;
   rightText(t, c.name, Font.semiboldSystemFont(11), C.text);
   t.addSpacer();
-  rightText(t, fmt(c.month), Font.boldSystemFont(14), C.text);
+  rightText(t, fmt(c.week), Font.boldSystemFont(14), C.text);
 }
 
 function buildWidget(d) {
@@ -88,16 +88,16 @@ function buildWidget(d) {
   w.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
   const bank = wallet(d, 'bank').bal;
 
-  if (fam === 'accessoryInline') { w.addText(`החודש ${fmt(d.month_spent)}`); return w; }
+  if (fam === 'accessoryInline') { w.addText(`השבוע ${fmt(d.week_spent)}`); return w; }
   if (fam === 'accessoryCircular') {
     w.addAccessoryWidgetBackground = true;
-    const t = w.addText(`${Math.round(d.month_spent)}`); t.font = Font.boldSystemFont(16); t.centerAlignText(); t.minimumScaleFactor = 0.5;
-    const s = w.addText('₪ החודש'); s.font = Font.systemFont(9); s.centerAlignText();
+    const t = w.addText(`${Math.round(d.week_spent)}`); t.font = Font.boldSystemFont(16); t.centerAlignText(); t.minimumScaleFactor = 0.5;
+    const s = w.addText('₪ השבוע'); s.font = Font.systemFont(9); s.centerAlignText();
     return w;
   }
   if (fam === 'accessoryRectangular') {
-    const a = w.addText('הוצאת החודש'); a.font = Font.systemFont(11);
-    const b = w.addText(fmt(d.month_spent)); b.font = Font.boldSystemFont(20);
+    const a = w.addText('הוצאת השבוע'); a.font = Font.systemFont(11);
+    const b = w.addText(fmt(d.week_spent)); b.font = Font.boldSystemFont(20);
     if (bank != null) { const c = w.addText(`בבנק ${fmt(bank)}`); c.font = Font.systemFont(11); }
     return w;
   }
@@ -144,7 +144,7 @@ async function quickLog(d) {
   if (!cat) {
     const pick = new Alert();
     pick.title = 'הוצאה חדשה';
-    pick.message = `הוצאת החודש: ${fmt(d.month_spent)}`;
+    pick.message = `הוצאת השבוע: ${fmt(d.week_spent)}`;
     cats.forEach(c => pick.addAction(c.name));
     pick.addCancelAction('ביטול');
     const i = await pick.presentSheet();
@@ -171,7 +171,7 @@ async function quickLog(d) {
   const left = wallet(res, method === 'card' ? 'bank' : method);
   const ok = new Alert();
   ok.title = `נשמר · ${fmt(amount)}`;
-  ok.message = `הוצאת החודש ${fmt(res.month_spent)}${left.bal != null ? `\n${left.name}: ${fmt(left.bal)}` : ''}`;
+  ok.message = `הוצאת השבוע ${fmt(res.week_spent)}${left.bal != null ? `\n${left.name}: ${fmt(left.bal)}` : ''}`;
   ok.addAction('סגור');
   await ok.present();
 }

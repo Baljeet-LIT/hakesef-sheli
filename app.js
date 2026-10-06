@@ -43,7 +43,7 @@ function fresh() {
 function freshSync() { return { since: null, dirty: {}, tomb: [], docDirty: false, lastOk: 0, lastErr: '' }; }
 
 let S = load();
-const UI = { tab: 'today', monthOffset: 0, histCat: null, sheet: null, setSec: null, ctx: null }; // ctx: the account / debt sheet that's open
+const UI = { tab: 'today', periodOffset: 0, histCat: null, sheet: null, setSec: null, ctx: null }; // ctx: the account / debt sheet that's open
 
 function load() {
   try { const raw = localStorage.getItem(KEY); if (raw) { const o = JSON.parse(raw); return Object.assign(fresh(), { migr: {} }, o); } } catch (e) {}
@@ -58,6 +58,7 @@ const sum = (arr, f = x => x) => arr.reduce((a, x) => a + (+f(x) || 0), 0);
 
 /* ---------------- time ---------------- */
 
+function weekStart(t = Date.now()) { const d = new Date(t); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - d.getDay()); return d.getTime(); }
 function monthStart(t = Date.now(), off = 0) { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth() + off, 1).getTime(); }
 function ym(t = Date.now()) { const d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
 function dayStart(t = Date.now()) { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); }
@@ -71,6 +72,21 @@ function dayLabel(t) {
 }
 function shortDate(t) { const d = new Date(t); return `${d.getDate()}.${d.getMonth() + 1}`; }
 function timeLabel(t) { return new Date(t).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }); }
+/* Week (from Sunday) or month, whichever you look at. off: 0 = this one, -1 = the one before. */
+const period = () => S.period === 'week' ? 'week' : 'month';
+function periodRange(off = 0, p = period()) {
+  if (p === 'week') { const a = weekStart(Date.now() + off * 7 * DAY); return [a, weekStart(a + 8 * DAY)]; }
+  return [monthStart(Date.now(), off), monthStart(Date.now(), off + 1)];
+}
+function periodName(off = 0, p = period()) {
+  const [a, b] = periodRange(off, p);
+  if (p === 'month') return monthName(a);
+  return off === 0 ? 'השבוע' : off === -1 ? 'שבוע שעבר' : `${shortDate(a)} עד ${shortDate(b - DAY)}`;
+}
+function periodSeg() {
+  const p = period();
+  return `<div class="seg period"><button class="${p === 'week' ? 'on' : ''}" data-act="period" data-v="week">שבוע</button><button class="${p === 'month' ? 'on' : ''}" data-act="period" data-v="month">חודש</button></div>`;
+}
 function isoDay(t) { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 
 /* ---------------- money helpers ---------------- */
@@ -347,7 +363,7 @@ function render() {
 
 function tabBar() {
   const t = (id, label, icon) => `<button class="tab ${UI.tab === id ? 'on' : ''}" data-act="tab" data-v="${id}">${icon}<span>${label}</span></button>`;
-  return `<nav class="tabs">${t('today', 'היום', I.home)}${t('history', 'הוצאות', I.list)}<button class="fab" data-act="add" aria-label="הוצאה חדשה">${I.plus}</button>${t('month', 'החודש', I.cal)}${t('goals', 'מטרות', I.flag)}</nav>`;
+  return `<nav class="tabs">${t('today', 'היום', I.home)}${t('history', 'הוצאות', I.list)}<button class="fab" data-act="add" aria-label="הוצאה חדשה">${I.plus}</button>${t('month', 'סיכום', I.cal)}${t('goals', 'מטרות', I.flag)}</nav>`;
 }
 
 function header(title, sub = '') {
@@ -380,7 +396,7 @@ function viewWelcome() {
 function viewToday() {
   let out = header('היום', new Date(Date.now()).toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long' }));
   out += walletsCard();
-  out += `<div class="grid2" style="margin-bottom:12px"><button class="btn block" data-act="income">הכנסה</button><button class="btn ghost block" data-act="transfer">העברה</button></div>`;
+  out += `<div class="grid2" style="margin:12px 0"><button class="btn block" data-act="income">הכנסה</button><button class="btn ghost block" data-act="transfer">העברה</button></div>`;
   out += alerts().join('');
   const ap = unsortedApplePay();
   if (ap.length) out += `<div class="card"><div class="row"><h3 style="margin:0">מאפל פיי · לבחור קטגוריה</h3><button class="btn ghost sm" data-act="ap-ok">הכל נכון</button></div><p class="muted small" style="margin:4px 0 0">מקומות חדשים. לחיצה כדי לתקן. מהפעם הבאה הם ייכנסו לבד לקטגוריה הנכונה.</p><ul class="list" style="margin-top:4px">${ap.slice(0, 5).map(x => expenseItem(x, true)).join('')}</ul></div>`;
@@ -393,19 +409,22 @@ function viewToday() {
   return out;
 }
 
-/* Bank and cash. Tap one to see what went in and out, or to count it. (Wolt matters less: it lives in the expense sheet and settings.) */
+/* How much you have: bank + cash + savings (Wolt credit isn't counted: it expires). Then bank and cash, tap one to see its moves or count it. */
 function walletsCard() {
-  const t = w => { const b = balance(w.id); return `<button class="acct" data-act="acct" data-v="${w.id}"><span>${w.name}</span><b>${b == null ? 'לספור' : money(b)}</b></button>`; };
-  const sv = S.settings.savings.length ? `<button class="acct-sub" data-act="tab" data-v="goals">בחסכונות ${money(savingsTotal())}</button>` : '';
-  return `<div class="accts">${WALLETS.filter(w => w.id !== 'wolt').map(t).join('')}</div>${sv}`;
+  const bank = balance('bank'), cash = balance('cash'), sv = savingsTotal();
+  const t = (id, b) => `<button class="acct" data-act="acct" data-v="${id}"><span>${acctName(id)}</span><b>${b == null ? 'לספור' : money(b)}</b></button>`;
+  const total = (bank || 0) + (cash || 0) + sv;
+  return `<div class="card hero kpi"><div class="label">יש לי</div><div class="amount">${money(total, false)}<span class="cur">₪</span></div>
+    ${sv ? `<button class="meta" data-act="tab" data-v="goals">מתוכם ${money(sv)} בחסכונות</button>` : ''}</div>
+    <div class="accts">${t('bank', bank)}${t('cash', cash)}</div>`;
 }
 
-/* This month's spending, by category. Tap a category to log an expense in it. */
+/* Spending this week or month, by category. Tap a category to see its expenses. */
 function spentCard() {
-  const a = monthStart(), exps = expIn(a, Infinity, mine), today = sum(expIn(dayStart(), Infinity, mine), x => x.amount);
-  const tiles = S.settings.categories.map(c => `<button class="tile" style="--c:${c.color}" data-act="tile" data-v="${c.id}"><span class="tn">${esc(c.name)}</span><span class="ta">${money(sum(exps.filter(x => x.cat === c.id), x => x.amount))}</span></button>`).join('');
-  return `<div class="card"><button class="row" data-act="tab" data-v="month" style="width:100%"><h3 style="margin:0">הוצאת ב${monthOnly(a)}</h3><span class="muted small">${today ? `היום ${plain(today)}` : ''}</span></button>
-    <div class="big-num" style="margin:2px 0 10px">${money(sum(exps, x => x.amount))}</div><div class="tiles">${tiles}</div></div>`;
+  const [a, b] = periodRange(0), exps = expIn(a, b, mine), today = sum(expIn(dayStart(), Infinity, mine), x => x.amount);
+  const tiles = S.settings.categories.map(c => `<button class="tile" style="--c:${c.color}" data-act="cat-hist" data-v="${c.id}"><span class="tn">${esc(c.name)}</span><span class="ta">${money(sum(exps.filter(x => x.cat === c.id), x => x.amount))}</span></button>`).join('');
+  return `<div class="card"><div class="row"><h3 style="margin:0">${period() === 'week' ? 'הוצאת השבוע' : `הוצאת ב${monthOnly(a)}`}</h3>${periodSeg()}</div>
+    <button class="row" data-act="tab" data-v="month" style="width:100%;margin:4px 0 10px"><span class="big-num">${money(sum(exps, x => x.amount))}</span><span class="muted small">${today ? `היום ${plain(today)}` : ''}</span></button><div class="tiles">${tiles}</div></div>`;
 }
 
 function alerts() {
@@ -414,8 +433,8 @@ function alerts() {
   if (uncounted.length) out.push(alert('', 'כמה יש עכשיו?', 'כותבים פעם אחת כמה יש, ומשם האפליקציה עוקבת לבד.', uncounted.map(w => `<button class="btn sm" data-act="count" data-v="${w.id}">${w.name}</button>`).join('')));
   for (const d of activeDebts()) {
     const m = debtMonth(d); if (m.open <= 0 || !d.day) continue;
-    if (d.day < today) out.push(alert('bad', `${esc(d.name)} · ${money(m.open)}`, `היה ב-${d.day} לחודש ועוד לא סומן.`, `<button class="btn sm" data-act="pay-debt" data-v="${d.id}">שילמתי</button>`));
-    else if (d.day - today <= 4) out.push(alert('warn', `${esc(d.name)} · ${money(m.open)}`, d.day === today ? 'היום.' : `ב-${d.day} לחודש.`, `<button class="btn sm ghost" data-act="pay-debt" data-v="${d.id}">שילמתי</button>`));
+    const late = d.day < today;
+    if (late || d.day - today <= 4) out.push(`<div class="due-row ${late ? 'late' : ''}"><div class="main"><div class="n">תשלום ל${esc(d.name)} · ${money(m.open)}</div><div class="s">${late ? `היה ב-${d.day} לחודש ועוד לא סומן` : d.day === today ? 'היום' : d.day === today + 1 ? 'מחר' : `ב-${d.day} לחודש`}</div></div><button class="btn sm ${late ? '' : 'ghost'}" data-act="pay-debt" data-v="${d.id}">שילמתי</button></div>`);
   }
   if (!S.cloud && S.expenses.length > 5 && Date.now() - (S.lastBackup || S.created) > 14 * DAY) out.push(alert('', 'כדאי לגבות', 'עברו שבועיים מהגיבוי האחרון. זה לוקח עשר שניות.', `<button class="btn sm ghost" data-act="backup">לגבות</button>`));
   return out;
@@ -425,18 +444,20 @@ function alerts() {
 function viewHistory() {
   let out = header('הוצאות');
   const chip = (v, name, color) => `<button class="chip ${(UI.histCat || '') === v ? 'on' : ''}" ${color ? `style="--c:${color}"` : ''} data-act="hist-cat" data-v="${v}">${esc(name)}</button>`;
-  out += `<div class="chips scroll" style="margin-bottom:12px">${chip('', 'הכל')}${S.settings.categories.map(c => chip(c.id, c.name, c.color)).join('')}${S.expenses.some(x => x.reimb) ? chip('_reimb', 'יחזירו לי', '#b08a2e') : ''}</div>`;
+  out += `<div class="row" style="margin-bottom:10px"><span class="muted small">סיכום לפי</span>${periodSeg()}</div><div class="chips scroll" style="margin-bottom:12px">${chip('', 'הכל')}${S.settings.categories.map(c => chip(c.id, c.name, c.color)).join('')}${S.expenses.some(x => x.reimb) ? chip('_reimb', 'יחזירו לי', '#b08a2e') : ''}</div>`;
   const pred = UI.histCat === '_reimb' ? x => x.reimb : UI.histCat ? x => x.cat === UI.histCat : () => true;
   const list = S.expenses.filter(pred).sort((a, b) => b.ts - a.ts).slice(0, 400);
   if (!list.length) return out + `<div class="card"><div class="empty">אין עדיין הוצאות${UI.histCat ? ' כאן' : ''}.</div></div>`;
   const totals = {};
-  list.forEach(x => { const m = monthStart(x.ts); totals[m] = (totals[m] || 0) + (UI.histCat === '_reimb' || mine(x) ? x.amount : 0); });
+  const startOf = period() === 'week' ? weekStart : t => monthStart(t);
+  const groupName = a => period() === 'week' ? (a === weekStart() ? 'השבוע' : a === weekStart() - 7 * DAY ? 'שבוע שעבר' : `${shortDate(a)} עד ${shortDate(a + 6 * DAY)}`) : monthName(a);
+  list.forEach(x => { const m = startOf(x.ts); totals[m] = (totals[m] || 0) + (UI.histCat === '_reimb' || mine(x) ? x.amount : 0); });
   let curM = null, curDay = null, html = '';
   for (const x of list) {
-    const m = monthStart(x.ts), d = dayStart(x.ts);
+    const m = startOf(x.ts), d = dayStart(x.ts);
     if (m !== curM) {
       if (curM !== null) html += `</ul></div>`;
-      html += `<div class="daybar" style="font-size:15px;color:var(--ink)"><span>${monthName(m)}</span><span>${money(totals[m])}</span></div><div class="card" style="padding:4px 14px"><ul class="list">`;
+      html += `<div class="daybar" style="font-size:15px;color:var(--ink)"><span>${groupName(m)}</span><span>${money(totals[m])}</span></div><div class="card" style="padding:4px 14px"><ul class="list">`;
       curM = m; curDay = null;
     }
     if (d !== curDay) { html += `<li class="daybar" style="margin:10px 0 0">${dayLabel(x.ts)}</li>`; curDay = d; }
@@ -445,11 +466,12 @@ function viewHistory() {
   return out + html + `</ul></div>`;
 }
 
-/* ----- month: where the money went ----- */
+/* ----- summary: where the money went, this week or month ----- */
 const SRC = { salary: 'משכורת', transfer: 'העברה', cash: 'מזומן שקיבלתי', other: 'אחר' };
 function viewMonth() {
-  const off = UI.monthOffset, a = monthStart(Date.now(), off), b = monthStart(Date.now(), off + 1);
-  let out = `<div class="top"><div class="monthnav"><button class="icon-btn" data-act="month-nav" data-v="-1">${I.chevR}</button><h1 style="font-size:22px">${monthName(a)}</h1><button class="icon-btn" data-act="month-nav" data-v="1" ${off >= 0 ? 'disabled style="opacity:.3"' : ''}>${I.chevL}</button></div><button class="icon-btn" data-act="tab" data-v="settings">${I.gear}</button></div>`;
+  const off = UI.periodOffset, [a, b] = periodRange(off);
+  let out = `<div class="top"><div class="monthnav"><button class="icon-btn" data-act="period-nav" data-v="-1">${I.chevR}</button><h1 style="font-size:22px">${periodName(off)}</h1><button class="icon-btn" data-act="period-nav" data-v="1" ${off >= 0 ? 'disabled style="opacity:.3"' : ''}>${I.chevL}</button></div><button class="icon-btn" data-act="tab" data-v="settings">${I.gear}</button></div>
+    <div style="margin:-4px 0 12px">${periodSeg()}</div>`;
   const exps = expIn(a, b, mine), spent = sum(exps, x => x.amount);
   const ins = allMoves().filter(m => m.kind === 'in' || (m.auto && m.kind === 'count')).filter(m => inRange(m.ts, a, b)).sort((p, q) => p.ts - q.ts);
   const inSum = sum(ins, m => m.amount), debts = S.moves.filter(m => m.kind === 'debt' && inRange(m.ts, a, b)), debtSum = sum(debts, m => m.amount);
@@ -461,11 +483,11 @@ function viewMonth() {
     <div class="row line total"><span>${net >= 0 ? 'נשאר' : 'יצא יותר ממה שנכנס'}</span><b style="color:${net >= 0 ? 'var(--sage)' : 'var(--bad)'}">${money(Math.abs(net))}</b></div></div>`;
   const byCat = S.settings.categories.map(c => ({ c, s: sum(exps.filter(x => x.cat === c.id), x => x.amount) })).filter(o => o.s > 0).sort((p, q) => q.s - p.s);
   const top = byCat.length ? byCat[0].s : 1;
-  out += `<div class="card"><h3>לאן הלך הכסף</h3>${byCat.length ? byCat.map(o => `<button class="catbar" data-act="cat-hist" data-v="${o.c.id}"><div class="row"><span>${esc(o.c.name)}</span><span class="muted">${money(o.s)} · ${Math.round(o.s / spent * 100)}%</span></div><div class="bar"><i style="width:${o.s / top * 100}%;background:${o.c.color}"></i></div></button>`).join('') : '<div class="empty">עוד אין הוצאות בחודש הזה.</div>'}</div>`;
+  out += `<div class="card"><h3>לאן הלך הכסף</h3>${byCat.length ? byCat.map(o => `<button class="catbar" data-act="cat-hist" data-v="${o.c.id}"><div class="row"><span>${esc(o.c.name)}</span><span class="muted">${money(o.s)} · ${Math.round(o.s / spent * 100)}%</span></div><div class="bar"><i style="width:${o.s / top * 100}%;background:${o.c.color}"></i></div></button>`).join('') : `<div class="empty">עוד אין הוצאות ב${period() === 'week' ? 'שבוע' : 'חודש'} הזה.</div>`}</div>`;
   if (ins.length) out += `<div class="card"><h3>מה נכנס</h3><ul class="list">${ins.map(m => `<li class="item"><div class="main"><div class="n">${esc(m.note || SRC[m.src] || 'הכנסה')}</div><div class="s">${m.note && SRC[m.src] ? SRC[m.src] + ' · ' : ''}ל${esc(acctName(m.to))} · ${shortDate(m.ts)}</div></div><div class="amt" style="color:var(--sage)">${money(m.amount)}</div></li>`).join('')}</ul></div>`;
   if (debts.length) out += `<div class="card"><h3>תשלומי חובות</h3>${debts.sort((p, q) => p.ts - q.ts).map(m => `<div class="row line"><span>${esc(debt(m.debtId)?.name || 'חוב')} <span class="muted small">· ${shortDate(m.ts)} · מ${esc(acctName(m.from))}</span></span><b>${money(m.amount)}</b></div>`).join('')}</div>`;
   const air = expIn(a, b, x => x.reimb && !x.back);
-  if (air.length) out += `<button class="reimb-line" data-act="reimb"><span>עוד מחכה שיחזירו לך ${money(sum(air, x => x.amount))}</span><span class="muted">לא נספר בהוצאות</span></button>`;
+  if (air.length) out += `<button class="reimb-line" data-act="reimb"><span>מחכה שיחזירו לך ${money(sum(air, x => x.amount))}</span><span class="muted">לא נספר בהוצאות</span></button>`;
   return out;
 }
 
@@ -1014,10 +1036,9 @@ document.addEventListener('click', e => {
   const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
   const act = b.dataset.act, v = b.dataset.v;
   switch (act) {
-    case 'tab': UI.tab = v; if (v === 'settings') UI.setSec = null; if (v === 'month') UI.monthOffset = 0; if (v === 'history') UI.histCat = null; render(); window.scrollTo(0, 0); break;
+    case 'tab': UI.tab = v; if (v === 'settings') UI.setSec = null; if (v === 'month') UI.periodOffset = 0; if (v === 'history') UI.histCat = null; render(); window.scrollTo(0, 0); break;
     case 'add': openAdd(); break;
     case 'add-from': openAdd(); D.method = methodOf(v); D.methodTouched = true; renderAdd(); break;
-    case 'tile': openAdd(); D.cat = v; D.catTouched = true; renderAdd(); break;
     case 'close': closeSheet(); break;
     case 'edit': { const x = S.expenses.find(x => x.id === b.dataset.id); if (x) openAdd(x); break; }
     case 'key': {
@@ -1036,7 +1057,8 @@ document.addEventListener('click', e => {
     case 'del-exp': deleteExpense(D.id); save(); closeSheet(); render(); toast('נמחק'); break;
     case 'hist-cat': UI.histCat = v || null; render(); break;
     case 'cat-hist': UI.tab = 'history'; UI.histCat = v; render(); window.scrollTo(0, 0); break;
-    case 'month-nav': UI.monthOffset = Math.min(0, UI.monthOffset + parseInt(v, 10)); render(); break;
+    case 'period-nav': UI.periodOffset = Math.min(0, UI.periodOffset + parseInt(v, 10)); render(); break;
+    case 'period': S.period = v; UI.periodOffset = 0; persist(); render(); break;
     case 'income': openIncome(v); break;
     case 'transfer': openTransfer(v); break;
     case 'acct': openAccount(v); break;
