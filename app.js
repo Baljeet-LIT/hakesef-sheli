@@ -1190,6 +1190,9 @@ if (navigator.storage && navigator.storage.persist) navigator.storage.persist().
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 let SCRIPT_TPL = null;
 function loadScriptTpl() { fetch('scriptable.js').then(r => r.ok ? r.text() : null).then(t => { if (t) SCRIPT_TPL = t; }).catch(() => {}); }
+// 2026-10-10: the cloud moved to a new Supabase project (the old organization was blocked). Same data, same key.
+const CLOUD_MOVED = { 'https://ylbzzogwwmwqnhponmhw.supabase.co': { url: 'https://ygimonbajdjcjhyqvixv.supabase.co', anon: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlnaW1vbmJhamRqY2poeXF2aXh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE2MTg5MzYsImV4cCI6MjEwNzE5NDkzNn0.lnMi0All1R4-ouMK5a8wN18b5gvaAQRRi8T8bhaDddE' } };
+if (S.cloud && CLOUD_MOVED[S.cloud.url]) { Object.assign(S.cloud, CLOUD_MOVED[S.cloud.url]); S.sync.docDirty = true; S.sync.lastErr = ''; persist(); }
 if (S.cloud) { loadScriptTpl(); scheduleSync(300); }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (!UI.sheet) render(); scheduleSync(200); } });
 window.addEventListener('online', () => scheduleSync(200));
